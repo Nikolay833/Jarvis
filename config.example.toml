@@ -31,6 +31,8 @@ output_device = ""
 silence_seconds = 1.0    # end of speech
 max_record_seconds = 20.0
 no_speech_timeout = 6.0  # give up if nobody speaks after the wake word
+announce_ready = true    # say "Online, sir." once models are loaded
+chime = true             # soft chime when Jarvis starts listening
 
 [bus]
 host = "127.0.0.1"

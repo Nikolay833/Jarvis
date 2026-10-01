@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -96,6 +97,21 @@ class OllamaClient:
         if self.think is not None and self._supports_think:
             payload["think"] = self.think
         return payload
+
+    async def warm_up(self) -> float:
+        """Load the model into VRAM with an empty chat request. Returns seconds taken."""
+        import httpx
+
+        payload = {"model": self.model, "messages": [], "stream": False, "keep_alive": self.keep_alive,
+                   "options": {"num_ctx": self.num_ctx}}  # same num_ctx, or Ollama reloads the model
+        t0 = time.perf_counter()
+        try:
+            resp = await self._http().post("/api/chat", json=payload)
+        except httpx.HTTPError as exc:
+            raise LLMError(f"Cannot reach Ollama at {self.url}: {exc!r}") from exc
+        if resp.status_code != 200:
+            raise LLMError(f"Ollama error {resp.status_code}: {resp.text[:300]}")
+        return time.perf_counter() - t0
 
     async def chat(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> LLMResponse:
         import httpx

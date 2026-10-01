@@ -5,15 +5,17 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import logging.handlers
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any
 
 from .agent import Agent, Confirmer
 from .bus import EventBus
-from .config import Config, load_config
-from .llm import OllamaClient
+from .config import Config, load_config, repo_root
+from .llm import LLMError, OllamaClient
 from .tools import load_all
 from .tools.context import set_context
 
@@ -24,10 +26,16 @@ log = logging.getLogger("jarvis")
 class Request:
     kind: str  # "text" | "activate"
     text: str = ""
+    source: str = "hotkey"  # activate only: "wake" (audio after the wake word is queued) | "hotkey"
+
+BANNER = "Jarvis ready. Say 'Hey Jarvis' or press Ctrl+Alt+J."
+SORRY = "Sorry sir, I didn't catch that."
+APOLOGY = "Apologies sir, something went wrong. Check the console."
+NO_OLLAMA = "I cannot reach my language model, sir. Is Ollama running?"
 
 
 class Assistant:
-    def __init__(self, cfg: Config, voice: bool = True) -> None:
+    def __init__(self, cfg: Config, voice: bool = True, debug_audio: bool = False) -> None:
         self.cfg = cfg
         self.voice = voice
         self.bus = EventBus(cfg.bus.host, cfg.bus.port)
@@ -37,16 +45,20 @@ class Assistant:
         self.recorder: Any = None
         self.stt: Any = None
         self.speaker: Any = None
+        self.mic: Any = None
+        self.llm_ok = False
 
         if voice:
+            from .audio.mic import MicStream
             from .audio.recorder import Recorder
             from .audio.stt import Transcriber
             from .audio.tts import KokoroSpeaker
             from .audio.wakeword import WakeWordDetector
 
             a = cfg.audio
-            self.wake = WakeWordDetector(cfg.wakeword.model, cfg.wakeword.threshold, a.input_device)
-            self.recorder = Recorder(a.silence_seconds, a.max_record_seconds, a.no_speech_timeout, a.input_device)
+            self.mic = MicStream(a.input_device)
+            self.wake = WakeWordDetector(cfg.wakeword.model, cfg.wakeword.threshold, self.mic, debug=debug_audio)
+            self.recorder = Recorder(self.mic, a.silence_seconds, a.max_record_seconds, a.no_speech_timeout)
             w = cfg.whisper
             self.stt = Transcriber(w.model, w.device, w.compute_type, w.fallback_model, w.language)
             self.speaker = KokoroSpeaker(self.bus, cfg.tts.voice, cfg.tts.lang_code, cfg.tts.speed, a.output_device)
@@ -64,29 +76,67 @@ class Assistant:
                            cfg.agent.max_steps, cfg.agent.max_history_messages)
 
     # ---- audio helpers ---------------------------------------------------
-    async def load_models(self) -> None:
-        if not self.voice:
-            return
-        log.info("loading models (first run downloads them)...")
-        await asyncio.gather(
-            asyncio.to_thread(self.wake.load),
-            asyncio.to_thread(self.stt.load),
-            asyncio.to_thread(self.speaker.load),
-        )
+    async def warm_up(self) -> None:
+        """Load models and run one dummy pass of each (CUDA kernels, VRAM) in parallel."""
+        t_all = time.perf_counter()
+        if self.voice:
+            log.info("loading models (first run downloads them)...")
 
-    async def record_text(self, cancel: threading.Event | None = None) -> str:
+        async def timed(label: str, fn: Any) -> None:
+            t0 = time.perf_counter()
+            await asyncio.to_thread(fn)
+            log.info("%s (%.1f s)", label, time.perf_counter() - t0)
+
+        async def warm(label: str, load: Any, warm: Any) -> None:
+            await timed(label + " loaded", load)
+            try:
+                await timed(label + " warm-up", warm)
+            except Exception:  # noqa: BLE001 - warm-up is best effort
+                log.warning("%s warm-up failed", label, exc_info=True)
+
+        async def warm_llm() -> None:
+            try:
+                secs = await self.llm.warm_up()
+                self.llm_ok = True
+                log.info("ollama model %s loaded in %.1f s", self.cfg.ollama.model, secs)
+            except LLMError as exc:
+                log.warning("Ollama not reachable at %s (%s). Start Ollama and run `ollama pull %s`.",
+                            self.cfg.ollama.url, exc, self.cfg.ollama.model)
+
+        jobs = [warm_llm()]
+        if self.voice:
+            jobs += [timed("wake word", self.wake.load),
+                     warm("whisper", self.stt.load, self.stt.warm_up),
+                     warm("tts", self.speaker.load, self.speaker.warm_up)]
+        await asyncio.gather(*jobs)
+        log.info("startup warm-up done in %.1f s", time.perf_counter() - t_all)
+
+    async def record_text(self, cancel: threading.Event | None = None, flush: bool = False,
+                          before: Any = None) -> str:
         audio = await asyncio.to_thread(
-            self.recorder.record_blocking, lambda lvl: self.bus.emit_nowait("level", rms=lvl), cancel)
+            lambda: self.recorder.record_blocking(
+                lambda lvl: self.bus.emit_nowait("level", rms=lvl), cancel, flush, before))
         self.bus.emit_nowait("level", rms=0.0)
         if audio.size == 0:
+            log.warning("no speech heard (recording ended: %s after %.1f s)",
+                        self.recorder.last_reason, self.recorder.last_seconds)
             return ""
-        return (await asyncio.to_thread(self.stt.transcribe, audio)).strip()
+        t0 = time.perf_counter()
+        text = (await asyncio.to_thread(self.stt.transcribe, audio)).strip()
+        log.info("heard: '%s' (stt %.1f s, audio %.1f s)", text, time.perf_counter() - t0, audio.size / 16000)
+        return text
+
+    def _chime(self) -> None:
+        from .audio.chime import play_chime
+        from .audio.mic import parse_device
+
+        play_chime(parse_device(self.cfg.audio.output_device), blocking=True)
 
     async def listen_text(self) -> str:
         """Record one utterance and transcribe (used for spoken yes/no). Cancel-safe."""
         cancel = threading.Event()
         self.bus.emit_nowait("state", state="listening")
-        task = asyncio.ensure_future(self.record_text(cancel))
+        task = asyncio.ensure_future(self.record_text(cancel, flush=True))
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
@@ -95,6 +145,14 @@ class Assistant:
             raise
         finally:
             self.bus.emit_nowait("state", state="thinking")
+
+    async def say_safe(self, text: str) -> None:
+        """Speak without ever raising (used for error and status messages)."""
+        try:
+            self.bus.emit_nowait("state", state="speaking")
+            await self.speaker.speak(text)
+        except Exception:  # noqa: BLE001
+            log.exception("could not speak %r", text)
 
     # ---- speaking out of turn -------------------------------------------
     async def announce(self, text: str) -> None:
@@ -115,16 +173,22 @@ class Assistant:
                     if not self.voice:
                         return
                     self.bus.emit_nowait("state", state="listening")
-                    text = await self.record_text()
+                    text = await self.record_text(flush=req.source != "wake",
+                                                  before=self._chime if self.cfg.audio.chime else None)
+                    if not text:
+                        await self.say_safe(SORRY)
+                        return
                 if not text:
                     return
                 self.bus.emit_nowait("transcript", text=text, final=True)
                 self.bus.emit_nowait("state", state="thinking")
                 reply = await self.agent.handle(text)
+                log.info("reply: '%s'", reply)
                 self.bus.emit_nowait("state", state="speaking")
                 await self.speaker.speak(reply)
             except Exception:  # noqa: BLE001
                 log.exception("turn failed")
+                await self.say_safe(APOLOGY)
             finally:
                 self.bus.emit_nowait("state", state="idle")
 
@@ -169,6 +233,8 @@ class Assistant:
         """Wake word or a queued request, whichever comes first."""
         if not self.voice:
             return await self.requests.get()
+        dropped = self.mic.flush()  # stale audio, e.g. our own TTS reply
+        log.debug("flushed %.1f s of queued mic audio", dropped)
         stop = threading.Event()
         wake_task = asyncio.ensure_future(asyncio.to_thread(self.wake.wait_blocking, stop))
         req_task = asyncio.ensure_future(self.requests.get())
@@ -183,19 +249,32 @@ class Assistant:
             return req_task.result()
         req_task.cancel()
         woke = wake_task.result()
-        return Request("activate") if woke else await self.requests.get()
+        return Request("activate", source="wake") if woke else await self.requests.get()
 
     async def run(self, repl: bool = False) -> None:
         try:
             await self.bus.start()
         except OSError as exc:
             log.warning("event bus unavailable (%s); running without the orb", exc)
-        await self.load_models()
+        if self.mic is not None:
+            try:
+                self.mic.start()
+            except Exception as exc:  # noqa: BLE001
+                log.error("cannot open the microphone (%s); check Windows sound settings or "
+                          "audio.input_device in config.toml", exc)
+                raise
+        await self.warm_up()
         bg = [asyncio.create_task(self.dispatch_bus())]
         if repl:
             bg.append(asyncio.create_task(self.stdin_repl()))
-        log.info("Jarvis ready (model %s, config: %s)", self.cfg.ollama.model, self.cfg.source)
+        log.info("model %s, config: %s", self.cfg.ollama.model, self.cfg.source)
+        log.info(BANNER if self.voice else "Jarvis ready (no voice).")
         try:
+            if self.voice and self.cfg.audio.announce_ready:
+                await self.say_safe("Online, sir.")
+                if not self.llm_ok:
+                    await self.say_safe(NO_OLLAMA)
+                self.bus.emit_nowait("state", state="idle")
             while True:
                 done_bg = [t for t in bg if t.done()]
                 for t in done_bg:
@@ -206,6 +285,8 @@ class Assistant:
         finally:
             for t in bg:
                 t.cancel()
+            if self.mic is not None:
+                self.mic.stop()
             await self.bus.stop()
             await self.llm.aclose()
 
@@ -231,19 +312,40 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--config", help="path to config.toml")
     p.add_argument("--text", action="store_true", help="keyboard REPL, no audio (implies --no-voice)")
     p.add_argument("--no-voice", action="store_true", help="do not load audio models; bus and text input only")
+    p.add_argument("--debug-audio", action="store_true",
+                   help="print mic level and wake word score twice a second")
     p.add_argument("-v", "--verbose", action="store_true")
     return p
 
 
+def setup_logging(verbose: bool = False) -> None:
+    """Console plus rotating file logs/jarvis.log (1 MB x 3) in the repo root."""
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG if verbose else logging.INFO)
+    console = logging.StreamHandler()
+    console.setFormatter(fmt)
+    root.addHandler(console)
+    try:
+        log_dir = repo_root() / "logs"
+        log_dir.mkdir(exist_ok=True)
+        fh = logging.handlers.RotatingFileHandler(log_dir / "jarvis.log", maxBytes=1_000_000, backupCount=3,
+                                                  encoding="utf-8")
+        fh.setFormatter(fmt)
+        root.addHandler(fh)
+    except OSError as exc:
+        log.warning("file logging disabled: %s", exc)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
-                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    setup_logging(args.verbose)
     cfg = load_config(args.config)
     voice = not (args.text or args.no_voice)
 
     async def runner() -> None:
-        assistant = Assistant(cfg, voice=voice)
+        assistant = Assistant(cfg, voice=voice, debug_audio=args.debug_audio)
         await assistant.run(repl=args.text)
 
     try:

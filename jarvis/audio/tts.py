@@ -7,12 +7,13 @@ import logging
 import queue
 import re
 import threading
+import time
 from typing import Any
 
 import numpy as np
 
 from .recorder import display_level, rms_of
-from .wakeword import parse_device
+from .mic import parse_device
 
 SAMPLE_RATE = 24000
 PLAY_BLOCK = 800  # 33 ms -> about 30 level events per second
@@ -72,6 +73,10 @@ class KokoroSpeaker:
             parts.append(np.asarray(audio, dtype=np.float32).reshape(-1))
         return np.concatenate(parts) if parts else np.zeros(0, dtype=np.float32)
 
+    def warm_up(self) -> None:
+        """Synthesize a short phrase so kernels are compiled before the first real reply."""
+        self.synth("Ready.")
+
     def stop(self) -> None:
         """Interrupt current speech (thread-safe)."""
         self._stop.set()
@@ -115,6 +120,8 @@ class KokoroSpeaker:
                             except queue.Empty:
                                 pass
 
+        t0 = time.perf_counter()
+        first_audio = True
         t = threading.Thread(target=producer, daemon=True)
         t.start()
         try:
@@ -127,6 +134,9 @@ class KokoroSpeaker:
                     if item is None:
                         break
                     sentence, audio = item
+                    if first_audio:
+                        first_audio = False
+                        log.info("tts first audio after %.1f s", time.perf_counter() - t0)
                     self.bus.emit_nowait("reply", text=sentence)
                     for i in range(0, len(audio), PLAY_BLOCK):
                         if self._stop.is_set():

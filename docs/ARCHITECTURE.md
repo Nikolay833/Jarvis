@@ -33,7 +33,7 @@ microphone ──► wake word ──► record until silence ──► STT ─�
 | Speech to text | `faster-whisper` | `large-v3-turbo` on CUDA, float16. Fallback `small` on CPU. |
 | LLM | Ollama HTTP API (`/api/chat`) | Default model `qwen3:14b`. Native tool calling. |
 | Text to speech | `kokoro` | Voice `bm_george` (British male), 24 kHz. |
-| Audio I/O | `sounddevice` | 16 kHz mono input. |
+| Audio I/O | `sounddevice` | One persistent 16 kHz mono `MicStream` (`audio/mic.py`) opened at startup; wake word and recorder both read from it, with a 1.5 s pre-roll ring. |
 | Event bus | `websockets` | Python core is the server. Orb is the client. |
 | Overlay | Tauri v2 | Transparent, frameless, always on top, click-through when idle. |
 
@@ -77,6 +77,21 @@ Orb to core:
 | `confirm_response` | `id`, `approved`: bool | User clicked approve/deny. |
 | `text_input` | `text` | Typed request instead of voice. |
 | `activate` | none | Hotkey/click: start listening without wake word. |
+
+## Audio flow and feedback
+
+- The mic stream never closes between wake word and recording, so speech right after
+  "Hey Jarvis" is kept. Recording starts with the audio after the detection frame; the
+  `EndpointDetector` runs in `after_wake` mode (no calibration from the first blocks, noise
+  floor from pre-roll, capped). Queued audio is flushed before wake listening resumes
+  (no self-hearing of TTS) and before hotkey/confirmation recordings.
+- Feedback: chime on wake/hotkey (its energy is ignored for endpointing), "Online, sir." at
+  startup, spoken apologies for empty transcripts ("Sorry sir, I didn't catch that.") and failed turns.
+- Startup warm-up in parallel: Ollama model load (empty `/api/chat`, same `num_ctx`/`keep_alive`),
+  Whisper on 1 s silence, Kokoro "Ready.". Ollama unreachable gives a WARNING and a spoken hint.
+- Logs: INFO per stage with timings (wake score, stt, llm steps, reply, tts first audio) to the
+  console and `logs/jarvis.log` (rotating 1 MB x 3). `--debug-audio` prints mic RMS and wake score.
+- The system prompt carries the local date/time, rebuilt on every LLM call.
 
 ## Safety model
 

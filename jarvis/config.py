@@ -48,6 +48,8 @@ class AudioConfig:
     silence_seconds: float = 1.0
     max_record_seconds: float = 20.0
     no_speech_timeout: float = 6.0
+    announce_ready: bool = True  # say "Online, sir." after startup
+    chime: bool = True  # soft chime when listening starts
 
 
 @dataclass

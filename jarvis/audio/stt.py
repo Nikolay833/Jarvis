@@ -44,3 +44,11 @@ class Transcriber:
             condition_on_previous_text=False,
         )
         return " ".join(s.text.strip() for s in segments).strip()
+
+    def warm_up(self) -> None:
+        """Transcribe 1 s of silence without VAD so CUDA kernels are compiled up front."""
+        self.load()
+        segments, _info = self._model.transcribe(np.zeros(16000, dtype=np.float32), language=self.language,
+                                                 beam_size=1, vad_filter=False)
+        for _ in segments:
+            pass

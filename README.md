@@ -24,6 +24,11 @@ cd orb; npm install; npm run tauri build; cd ..
 Try it without a microphone: `python -m jarvis --text`.
 Hotkey `Ctrl+Alt+J` starts listening without the wake word.
 
+Jarvis plays a soft chime when it starts listening, says "Online, sir." when ready
+(`audio.announce_ready`), and logs every stage with timings to the console and
+`logs/jarvis.log`. If nothing happens, run `python -m jarvis --debug-audio` to see the
+live mic level and wake score (twice a second).
+
 ## Safety
 
 Reading, listing and opening things run at once. Deleting, moving, installing,

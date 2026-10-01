@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 import uuid
 from datetime import datetime
 from typing import Any, Awaitable, Callable
@@ -155,8 +156,14 @@ class Agent:
         tools = self.registry.schemas()
         reply = ""
         try:
-            for _ in range(self.max_steps):
+            for step in range(1, self.max_steps + 1):
+                t0 = time.perf_counter()
                 resp = await self.llm.chat([self._system(), *msgs], tools)
+                took = time.perf_counter() - t0
+                if resp.tool_calls:
+                    log.info("llm step %d: tool calls %s (%.1f s)", step, [c.name for c in resp.tool_calls], took)
+                else:
+                    log.info("llm step %d: reply (%.1f s)", step, took)
                 assistant: dict[str, Any] = {"role": "assistant", "content": resp.content}
                 if resp.raw_tool_calls:
                     assistant["tool_calls"] = resp.raw_tool_calls
