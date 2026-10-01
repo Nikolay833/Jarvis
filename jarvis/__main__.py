@@ -347,6 +347,11 @@ class Assistant:
                 self.mic.start()
             except Exception as exc:  # noqa: BLE001
                 log.error("cannot open the microphone: %s", exc)
+                log.error("Another app may hold the mic exclusively: close apps using it (hover the mic icon "
+                          "in the taskbar), or untick 'Allow applications to take exclusive control' in "
+                          "mmsys.cpl > Recording > your mic > Advanced. Then start Jarvis again.")
+                await self.bus.stop()
+                await self.llm.aclose()
                 raise SystemExit(2) from None
         await self.warm_up()
         bg = [asyncio.create_task(self.dispatch_bus())]
