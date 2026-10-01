@@ -92,11 +92,7 @@ class MicStream:
             log.info("microphone open: %s at %d Hz%s", label, int(rate),
                      "" if int(rate) == self.sample_rate else f" (resampled to {self.sample_rate} Hz)")
             return
-        # One line per device (its last error) keeps the message short but complete.
-        per_dev: dict[str, str] = {}
-        for e in errors:
-            per_dev[e.split(" @ ")[0]] = e
-        detail = "\n  ".join(per_dev.values()) or "no input devices found"
+        detail = "\n  ".join(errors[-12:]) or "no input devices found"
         raise RuntimeError("could not open any microphone. Tried:\n  " + detail
                            + "\nRun `python -m jarvis --list-devices` and set audio.input_device in config.toml.")
 
