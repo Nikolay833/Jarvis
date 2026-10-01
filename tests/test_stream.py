@@ -293,9 +293,6 @@ def test_kokoro_stream_overlaps_synthesis_and_playback(monkeypatch):
         def __init__(self, **kw):
             pass
 
-        def start(self):
-            pass
-
         def __enter__(self):
             return self
 

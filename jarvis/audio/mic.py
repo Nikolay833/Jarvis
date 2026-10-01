@@ -21,9 +21,6 @@ BLOCK = 512  # callback block size (32 ms)
 
 log = logging.getLogger("jarvis.mic")
 
-# Input devices that capture the PC's own output, never the user's voice.
-_LOOPBACK_WORDS = ("stereo mix", "what u hear", "wave out", "loopback", "mix (", "cable output", "monitor of")
-
 
 def parse_device(value: str) -> int | str | None:
     """Config device string -> sounddevice device (index, name or default)."""
@@ -67,14 +64,7 @@ class MicStream:
         import sounddevice as sd
 
         errors: list[str] = []
-        candidates = self._candidates(sd)
-        # The configured/default mic is sometimes briefly busy (another app just released it):
-        # give it a few retries before falling back to anything else.
-        if candidates:
-            candidates = [candidates[0]] * 3 + candidates[1:]
-        for n, (dev, rate, label) in enumerate(candidates):
-            if 0 < n < 3:
-                time.sleep(0.7)
+        for dev, rate, label in self._candidates(sd):
             try:
                 stream = sd.InputStream(samplerate=rate, channels=1, dtype="int16",
                                         blocksize=int(self.block * rate / self.sample_rate),
@@ -108,17 +98,7 @@ class MicStream:
             d = devices[i]
             return f"#{i} {d['name']} [{apis[d['hostapi']]['name']}]"
 
-        def usable(i: int) -> bool:
-            d = devices[i]
-            if d.get("max_input_channels", 0) <= 0:
-                return False
-            # WDM-KS opens devices exclusively (it can lock out the speakers), and loopback
-            # inputs record what the PC plays rather than the user's voice.
-            if apis[d["hostapi"]]["name"] == "Windows WDM-KS":
-                return False
-            return not any(k in d["name"].lower() for k in _LOOPBACK_WORDS)
-
-        inputs = [i for i, d in enumerate(devices) if usable(i)]
+        inputs = [i for i, d in enumerate(devices) if d.get("max_input_channels", 0) > 0]
         if isinstance(self.device, int):
             first = self.device
         elif isinstance(self.device, str):
@@ -131,7 +111,7 @@ class MicStream:
             if first is not None and first < 0:
                 first = None
         # Same physical mic under other host APIs (names are truncated differently, so match a prefix).
-        api_rank = {"MME": 0, "Windows DirectSound": 1, "Windows WASAPI": 2}
+        api_rank = {"Windows WASAPI": 0, "Windows DirectSound": 1, "MME": 2, "Windows WDM-KS": 3}
         order: list[int] = []
         if first is not None and first in inputs:
             order.append(first)
@@ -254,42 +234,3 @@ def list_devices() -> str:
     except Exception:  # noqa: BLE001
         pass
     return "\n".join(lines)
-
-
-def open_output(sd: Any, device: Any, rate: int) -> tuple[Any, int]:
-    """Open a mono float32 OutputStream, falling back to the device's native rate and to
-    other host APIs. Returns (started stream, actual rate); the caller resamples if it differs."""
-    tries: list[tuple[Any, float]] = [(device, rate)]
-    try:
-        devs = list(sd.query_devices())
-        apis = list(sd.query_hostapis())
-        idx = device if isinstance(device, int) else int(sd.default.device[1])
-        if idx is not None and idx >= 0:
-            tries.append((idx, float(devs[idx]["default_samplerate"])))
-            stem = devs[idx]["name"][:20].lower()
-            for i, d in enumerate(devs):
-                if (i != idx and d.get("max_output_channels", 0) > 0 and d["name"][:20].lower() == stem
-                        and apis[d["hostapi"]]["name"] != "Windows WDM-KS"):
-                    tries += [(i, float(rate)), (i, float(d["default_samplerate"]))]
-    except Exception:  # noqa: BLE001
-        pass
-    tries += [(None, 48000.0), (None, 44100.0)]
-    last: Exception | None = None
-    for dev, r in dict.fromkeys(tries):
-        try:
-            out = sd.OutputStream(samplerate=r, channels=1, dtype="float32", device=dev)
-            out.start()
-            if int(r) != rate:
-                log.info("speaker opened at %d Hz (device %s); resampling", int(r), dev)
-            return out, int(r)
-        except Exception as exc:  # noqa: BLE001
-            last = exc
-    raise RuntimeError(f"could not open the speakers: {last}")
-
-
-def resample_float(audio: np.ndarray, src: int, dst: int) -> np.ndarray:
-    """Linear resample of a float32 mono clip."""
-    if src == dst or audio.size == 0:
-        return audio
-    n = max(1, int(round(len(audio) * dst / src)))
-    return np.interp(np.linspace(0, len(audio) - 1, n), np.arange(len(audio)), audio).astype(np.float32)
