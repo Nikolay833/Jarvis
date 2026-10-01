@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import re
@@ -13,7 +14,8 @@ from typing import Any, Awaitable, Callable
 
 from . import safety
 from .audio.tts import SentenceBuffer
-from .llm import LLM, LLMError, LLMResponse
+from . import paths
+from .llm import LLM, LLMError, LLMResponse, ToolCallStreamFilter, extract_text_tool_calls
 from .tools.registry import Registry
 
 log = logging.getLogger("jarvis.agent")
@@ -30,7 +32,39 @@ Use the tools to act on the PC; never claim to have done something you did not d
 If a request is ambiguous and a wrong guess could do harm, ask one short question first.
 Risky tools (deleting, installing, stopping things, running Claude Code) ask the user for approval automatically; just call the tool.
 For coding work in a project folder, use claude_code_run. For simple PC questions, use system_info or run_powershell.
+When the user asks you to do something on the PC, call the tool in this same response; never say you will do it later. Only reply in text after the tool results arrive, reporting what actually happened.
+To check what Claude Code said or did last, use claude_code_history. To make folders or files, use create_folder and write_file.
 After using tools, report the outcome in one short sentence. If a tool fails, say so plainly and suggest the next step."""
+
+NUDGE = "(system) You announced an action but did not call a tool. Call the appropriate tool now. Do not reply with text only."
+MAX_NUDGES = 2
+
+_LEAD = r"(?:(?:very well|certainly|of course|right|sure|ok(?:ay)?|alright|understood|absolutely|splendid)[,.!]?\s+)?(?:sir[,.!]?\s+)?"
+_ANNOUNCE = re.compile(
+    r"(?:^|[.!;:]\s+|\n)" + _LEAD +
+    r"(?:i['\u2019]ll|i will|i shall|i['\u2019]m going to|i am going to|i['\u2019]m about to|let me|let['\u2019]s|"
+    r"one moment|just a moment|one second|just a second|right away|on it|checking|creating|deleting|opening|"
+    r"making|searching|looking|fetching|reading|writing|starting|launching|running|allow me|"
+    r"i['\u2019]m (?:checking|creating|deleting|opening|making|searching|looking|fetching|reading|writing|starting)"
+    r")\b(?!\s+(?:know|be\b|need|have\b|ask|tell))",
+    re.IGNORECASE)
+
+
+def looks_like_announcement(text: str) -> bool:
+    """True if `text` promises an action instead of reporting a result (and is not a question)."""
+    text = (text or "").strip()
+    if not text or text.endswith("?"):
+        return False
+    return _ANNOUNCE.search(text) is not None
+
+
+@functools.lru_cache(maxsize=1)
+def full_system_prompt() -> str:
+    """Static system prompt incl. the user's folders; computed once so the KV cache stays valid."""
+    try:
+        return SYSTEM_PROMPT + "\n" + paths.folder_hint()
+    except Exception:  # noqa: BLE001
+        return SYSTEM_PROMPT
 
 _YES = {"yes", "yeah", "yep", "yup", "sure", "proceed", "approve", "approved", "confirm", "confirmed",
         "affirmative", "ok", "okay", "absolutely", "certainly", "correct", "accept", "accepted"}
@@ -185,7 +219,7 @@ class Agent:
         self.sessions[session] = msgs
 
     def _system(self) -> dict[str, str]:
-        return {"role": "system", "content": SYSTEM_PROMPT}
+        return {"role": "system", "content": full_system_prompt()}
 
     @staticmethod
     def now_prefix(now: datetime | None = None) -> str:
@@ -194,9 +228,9 @@ class Agent:
     @staticmethod
     def _with_now(msgs: list[dict[str, Any]], prefix: str) -> list[dict[str, Any]]:
         """Copy of `msgs` with `prefix` on the newest user message. History itself stays unprefixed."""
-        out = list(msgs)
+        out = [{k: v for k, v in m.items() if k != "_nudge"} if "_nudge" in m else m for m in msgs]
         for i in range(len(out) - 1, -1, -1):
-            if out[i].get("role") == "user":
+            if out[i].get("role") == "user" and "_nudge" not in msgs[i]:
                 out[i] = {**out[i], "content": prefix + str(out[i].get("content", ""))}
                 break
         return out
@@ -219,8 +253,9 @@ class Agent:
             resp = await self.llm.chat(wire, tools)
             if self.timing.get("first_token") is None:
                 self.timing["first_token"] = time.perf_counter()
-            return resp
+            return self._recover_calls(resp)
         buf = SentenceBuffer()
+        guard = ToolCallStreamFilter()
         final: LLMResponse | None = None
         try:
             async for item in chat_stream(wire, tools):
@@ -229,21 +264,34 @@ class Agent:
                     break
                 if self.timing.get("first_token") is None:
                     self.timing["first_token"] = time.perf_counter()
-                for sentence in buf.feed(item):
+                for sentence in buf.feed(guard.feed(item)):
                     out.push(sentence)
         except LLMError:
             if out.pushed:
                 raise  # already speaking: a retry would repeat words
             log.warning("streaming failed, falling back to non-streaming chat", exc_info=True)
-            return await self.llm.chat(wire, tools)
+            return self._recover_calls(await self.llm.chat(wire, tools))
         if final is None:
             raise LLMError("stream ended without a final message")
+        final = self._recover_calls(final)
         if final.tool_calls:
             buf.discard()  # tool step: do not speak the unfinished remainder
         else:
+            for sentence in buf.feed(guard.flush()):
+                out.push(sentence)
             for sentence in buf.flush():
                 out.push(sentence)
         return final
+
+    def _recover_calls(self, resp: LLMResponse) -> LLMResponse:
+        """Tool calls the model wrote as text become real calls (known tool names only)."""
+        if resp.tool_calls or not resp.content:
+            return resp
+        content, calls = extract_text_tool_calls(resp.content, self.registry.names())
+        if not calls:
+            return resp
+        log.info("recovered tool call(s) written as text: %s", [c.name for c in calls])
+        return LLMResponse(content=content, tool_calls=calls, raw_tool_calls=[])
 
     # ---- main loop -------------------------------------------------------
     async def handle(self, text: str, session: str = "default", speaker: Any = None) -> str:
@@ -263,6 +311,8 @@ class Agent:
         self.streamed = False
         self.first_audio_at = None
         reply = ""
+        executed: list[str] = []
+        nudged: list[dict[str, Any]] = []  # nudge exchanges, removed from history when the turn ends
         try:
             for step in range(1, self.max_steps + 1):
                 t0 = time.perf_counter()
@@ -280,14 +330,22 @@ class Agent:
                         {"function": {"name": c.name, "arguments": c.arguments}} for c in resp.tool_calls
                     ]
                 msgs.append(assistant)
+                if (not resp.tool_calls and tools and len(nudged) < 2 * MAX_NUDGES
+                        and looks_like_announcement(resp.content)):
+                    log.info("nudged model to call a tool (reply was: %s)", resp.content[:200])
+                    nudge = {"role": "user", "content": NUDGE, "_nudge": True}
+                    msgs.append(nudge)
+                    nudged += [assistant, nudge]
+                    continue
                 if not resp.tool_calls:
-                    reply = resp.content or "Very good, sir."
+                    reply = resp.content or ("Done, sir." if executed else "Apologies sir, I wasn't able to do that.")
                     if out is not None and not out.pushed:
                         out.push(reply)  # empty content: speak the fallback
                     break
                 if out is not None:
                     await out.finish()  # free the speaker (a confirmation may need it)
                 for call in resp.tool_calls:
+                    executed.append(call.name)
                     result = await self._run_tool(call.name, call.arguments)
                     msgs.append({"role": "tool", "tool_name": call.name, "content": result})
             else:
@@ -302,6 +360,9 @@ class Agent:
             if out is not None:
                 out.push(reply)
         finally:
+            if nudged:
+                msgs[:] = [m for m in msgs if not any(m is n for n in nudged)]
+            log.info("turn done: tools called %s", executed if executed else "none (no tools called)")
             if out is not None:
                 await out.finish()
                 self.streamed = out.pushed > 0

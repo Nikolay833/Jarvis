@@ -6,7 +6,7 @@ from .registry import Registry, Tool, ToolError, registry, tool
 
 
 def load_all() -> Registry:
-    from . import apps, claude_code, files, system  # noqa: F401  (register on import)
+    from . import apps, claude_code, claude_history, files, system  # noqa: F401  (register on import)
 
     return registry
 

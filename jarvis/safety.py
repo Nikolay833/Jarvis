@@ -77,6 +77,21 @@ def classify_call(name: str, args: dict[str, Any], base_risk: str = SAFE) -> Ass
         ext = os.path.splitext(str(args.get("path", "")))[1].lower()
         if ext in _EXECUTABLE_EXTS:
             return Assessment(RISKY, "runs a program")
+    if name == "write_file":
+        ext = os.path.splitext(str(args.get("path", "")))[1].lower()
+        if ext in _EXECUTABLE_EXTS:
+            return Assessment(RISKY, "writes a program or script file")
+        ow = args.get("overwrite", False)
+        if not (ow is True or str(ow).strip().lower() in ("true", "1", "yes")):
+            return Assessment(SAFE)  # the tool itself refuses to replace an existing file
+        from .paths import resolve_path
+
+        try:
+            exists = resolve_path(str(args.get("path", ""))).exists()
+        except (OSError, ValueError):
+            exists = False
+        if exists:
+            return Assessment(RISKY, "overwrites an existing file")
     return Assessment(SAFE)
 
 
@@ -93,6 +108,10 @@ def describe_call(name: str, args: dict[str, Any]) -> str:
         return f"permanently delete {_clip(args.get('path', ''))}"
     if name == "move_path":
         return f"move {_clip(args.get('src', ''))} to {_clip(args.get('dst', ''))}"
+    if name == "write_file":
+        return f"write to {_clip(args.get('path', ''))}"
+    if name == "create_folder":
+        return f"create the folder {_clip(args.get('path', ''))}"
     if name == "open_path":
         return f"open {_clip(args.get('path', ''))}"
     if name == "claude_code_run":

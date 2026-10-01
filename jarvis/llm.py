@@ -90,6 +90,176 @@ class ToolCall:
     arguments: dict[str, Any]
 
 
+# ---- tool calls emitted as text (qwen3 sometimes does this instead of structured tool_calls) ----
+_TAG_RE = re.compile(r"<tool_call>\s*(.*?)\s*(?:</tool_call>|\Z)", re.DOTALL | re.IGNORECASE)
+_FENCE_RE = re.compile(r"```(?:json|tool_call)?[ \t]*\n?(.*?)```", re.DOTALL | re.IGNORECASE)
+_dec = json.JSONDecoder()
+
+
+def _decode_all(payload: str) -> list[Any]:
+    """All JSON values in `payload`, back to back (a list counts as its items). [] if it is not JSON."""
+    out: list[Any] = []
+    i, n = 0, len(payload)
+    while i < n:
+        while i < n and payload[i] in " \t\r\n,":
+            i += 1
+        if i >= n:
+            break
+        try:
+            val, i = _dec.raw_decode(payload, i)
+        except ValueError:
+            return []
+        out.extend(val if isinstance(val, list) else [val])
+    return out
+
+
+def _as_call(obj: Any, known: set[str], need_args: bool) -> ToolCall | None:
+    if not isinstance(obj, dict):
+        return None
+    if isinstance(obj.get("function"), dict):
+        obj = obj["function"]
+    name = obj.get("name")
+    if not isinstance(name, str) or name not in known:
+        return None
+    has_args = "arguments" in obj or "parameters" in obj
+    if need_args and not has_args:
+        return None
+    args = obj.get("arguments", obj.get("parameters", {}))
+    if isinstance(args, str):
+        try:
+            args = json.loads(args or "{}")
+        except ValueError:
+            return None
+    if args is None:
+        args = {}
+    if not isinstance(args, dict):
+        return None
+    return ToolCall(name=name, arguments=args)
+
+
+def extract_text_tool_calls(content: str, known_names: Any) -> tuple[str, list[ToolCall]]:
+    """Find tool calls written as text in `content`; return (content without them, calls).
+
+    Understands `<tool_call>{...}</tool_call>`, fenced JSON and bare JSON objects with "name" plus
+    "arguments"/"parameters". Only names in `known_names` count. A <tool_call> tag is always removed.
+    """
+    known = set(known_names or ())
+    if not content or not known:
+        return content, []
+    calls: list[ToolCall] = []
+
+    def from_payload(payload: str, need_args: bool) -> list[ToolCall] | None:
+        vals = _decode_all(payload)
+        got = [_as_call(v, known, need_args) for v in vals]
+        return got if got and all(got) else None  # type: ignore[return-value]
+
+    def tag_sub(m: re.Match[str]) -> str:
+        got = from_payload(m.group(1), False)
+        if got:
+            calls.extend(got)
+        return ""
+
+    def fence_sub(m: re.Match[str]) -> str:
+        got = from_payload(m.group(1), True)
+        if got is None:
+            return m.group(0)
+        calls.extend(got)
+        return ""
+
+    text = _TAG_RE.sub(tag_sub, content)
+    text = _FENCE_RE.sub(fence_sub, text)
+    # bare JSON objects anywhere in the remaining text
+    out: list[str] = []
+    i = 0
+    while i < len(text):
+        j = text.find("{", i)
+        if j < 0:
+            break
+        try:
+            val, end = _dec.raw_decode(text, j)
+        except ValueError:
+            out.append(text[i:j + 1])
+            i = j + 1
+            continue
+        call = _as_call(val, known, True)
+        if call is None:
+            out.append(text[i:end])
+        else:
+            calls.append(call)
+            out.append(text[i:j])
+        i = end
+    out.append(text[i:])
+    if not calls and text == content:
+        return content, []
+    return "".join(out).strip(), calls
+
+
+class ToolCallStreamFilter:
+    """Hold back text that starts a text-form tool call so it is never spoken.
+
+    Feed visible deltas; get the safe-to-speak part. After `<tool_call>` or a line starting with
+    `{"name"` (also after a ```json fence) everything is suppressed. Works across chunk splits.
+    """
+
+    TAG = "<tool_call>"
+    LINE_STARTS = ('{"name"', "```json{\"name\"", "```{\"name\"")
+
+    def __init__(self) -> None:
+        self.triggered = False
+        self._pending = ""
+        self._at_start = True
+
+    def _tag_hold(self, text: str) -> int:
+        low = text.lower()
+        for n in range(min(len(self.TAG) - 1, len(low)), 0, -1):
+            if self.TAG.startswith(low[-n:]):
+                return n
+        return 0
+
+    def feed(self, chunk: str) -> str:
+        if self.triggered:
+            return ""
+        self._pending += chunk
+        out: list[str] = []
+        while self._pending and not self.triggered:
+            i = self._pending.lower().find(self.TAG)
+            if i >= 0:
+                out.append(self._pending[:i])
+                self._pending = ""
+                self.triggered = True
+                break
+            if self._at_start:
+                norm = re.sub(r"\s+", "", self._pending)
+                if not norm:
+                    out.append(self._pending)
+                    self._pending = ""
+                    break
+                if any(norm.startswith(c) for c in self.LINE_STARTS):
+                    self._pending = ""
+                    self.triggered = True
+                    break
+                if any(c.startswith(norm) for c in self.LINE_STARTS):
+                    break  # undecided: wait for more text
+                self._at_start = False
+                continue
+            nl = self._pending.find("\n")
+            if nl >= 0:
+                out.append(self._pending[:nl + 1])
+                self._pending = self._pending[nl + 1:]
+                self._at_start = True
+                continue
+            keep = self._tag_hold(self._pending)
+            cut = len(self._pending) - keep
+            out.append(self._pending[:cut])
+            self._pending = self._pending[cut:]
+            break
+        return "".join(out)
+
+    def flush(self) -> str:
+        rest, self._pending = ("" if self.triggered else self._pending), ""
+        return rest
+
+
 @dataclass
 class LLMResponse:
     content: str = ""
@@ -131,6 +301,18 @@ def normalize_keep_alive(value: int | str) -> int | str:
             return int(v)
         return v
     return value
+
+
+def finalize_response(content: str, raw_calls: list[dict[str, Any]],
+                      tools: list[dict[str, Any]] | None) -> LLMResponse:
+    """Build the step result; with no structured tool calls, look for text-form calls to known tools."""
+    calls = parse_tool_calls({"tool_calls": raw_calls})
+    if not calls and tools:
+        names = {t.get("function", {}).get("name") for t in tools}
+        content, calls = extract_text_tool_calls(content, names)
+        if calls:
+            log.info("recovered %d tool call(s) written as text: %s", len(calls), [c.name for c in calls])
+    return LLMResponse(content=content, tool_calls=calls, raw_tool_calls=list(raw_calls))
 
 
 class OllamaClient:
@@ -206,11 +388,7 @@ class OllamaClient:
         if resp.status_code != 200:
             raise LLMError(f"Ollama error {resp.status_code}: {resp.text[:300]}")
         message = resp.json().get("message", {})
-        return LLMResponse(
-            content=strip_think(message.get("content") or ""),
-            tool_calls=parse_tool_calls(message),
-            raw_tool_calls=list(message.get("tool_calls") or []),
-        )
+        return finalize_response(strip_think(message.get("content") or ""), message.get("tool_calls") or [], tools)
 
     async def chat_stream(self, messages: list[dict[str, Any]],
                           tools: list[dict[str, Any]] | None = None) -> AsyncIterator[str | LLMResponse]:
@@ -220,6 +398,7 @@ class OllamaClient:
         payload = self.build_payload(messages, tools)
         payload["stream"] = True
         stripper = ThinkStripper()
+        guard = ToolCallStreamFilter()
         visible: list[str] = []
         raw_calls: list[dict[str, Any]] = []
         try:
@@ -249,7 +428,9 @@ class OllamaClient:
                             text = stripper.feed(delta)
                             if text:
                                 visible.append(text)
-                                yield text
+                                text = guard.feed(text)
+                                if text:
+                                    yield text
                         if chunk.get("done"):
                             break
                     break
@@ -258,9 +439,10 @@ class OllamaClient:
         tail = stripper.flush()
         if tail:
             visible.append(tail)
+            tail = guard.feed(tail)
+            if tail:
+                yield tail
+        tail = guard.flush()
+        if tail:
             yield tail
-        yield LLMResponse(
-            content="".join(visible).strip(),
-            tool_calls=parse_tool_calls({"tool_calls": raw_calls}),
-            raw_tool_calls=raw_calls,
-        )
+        yield finalize_response("".join(visible).strip(), raw_calls, tools)

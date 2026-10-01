@@ -8,6 +8,7 @@ import shutil
 import time
 from pathlib import Path
 
+from ..paths import resolve_path
 from .context import IS_WINDOWS, ctx
 from .registry import ToolError, tool
 
@@ -15,13 +16,6 @@ MAX_READ_CHARS = 6000
 MAX_LIST = 200
 MAX_SEARCH_RESULTS = 50
 SEARCH_TIME_LIMIT = 15.0
-
-
-def resolve_path(path: str) -> Path:
-    p = Path(os.path.expandvars(os.path.expanduser(path.strip().strip('"'))))
-    if not p.is_absolute():
-        p = Path.home() / p
-    return p.resolve()
 
 
 def check_allowed(p: Path) -> Path:
@@ -69,6 +63,43 @@ def read_file(path: str) -> str:
     if len(text) > MAX_READ_CHARS:
         text = text[:MAX_READ_CHARS] + "\n...[truncated]"
     return text or "(empty file)"
+
+
+@tool("Create a folder (and missing parent folders). Safe.")
+def create_folder(path: str) -> str:
+    """Create a folder.
+
+    Args:
+        path: Folder to create. Can be like "desktop/new folder" or a full path.
+    """
+    p = _p(path)
+    if p.is_dir():
+        return f"{p} already exists"
+    if p.exists():
+        raise ToolError(f"{p} exists and is not a folder")
+    p.mkdir(parents=True, exist_ok=True)
+    return f"Created folder {p}"
+
+
+@tool("Write text to a file. Creating a new file is safe; overwriting an existing file or writing a "
+      "program or script file needs approval.")
+def write_file(path: str, content: str, overwrite: bool = False) -> str:
+    """Write a text file.
+
+    Args:
+        path: File path, e.g. "desktop/notes.txt".
+        content: Full text to write.
+        overwrite: Set true to replace an existing file.
+    """
+    p = _p(path)
+    if p.is_dir():
+        raise ToolError(f"{p} is a folder")
+    if p.exists() and not overwrite:
+        raise ToolError(f"{p} already exists; call again with overwrite=true to replace it")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    existed = p.exists()
+    p.write_text(content, encoding="utf-8")
+    return f"{'Overwrote' if existed else 'Created'} {p} ({len(content)} characters)"
 
 
 @tool("Search for files by name pattern (wildcards like *.pdf or report*) under a folder.")

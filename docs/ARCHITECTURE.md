@@ -49,7 +49,8 @@ jarvis/                 Python package (the core)
   fastpath.py           LLM-free answers for time/date/open app/lock/stop/volume (strict anchored regexes)
   agent.py              Conversation loop: messages, tool calls, confirmations
   safety.py             Risk classification of tool calls
-  tools/                Tool registry + tools (system, files, apps, claude_code)
+  paths.py              Path resolution (~, env vars, Desktop/Documents/... incl. OneDrive-redirected)
+  tools/                Tool registry + tools (system, files, apps, claude_code, claude_history)
 tests/                  pytest, no hardware or network needed
 orb/                    Tauri v2 overlay app
 config.example.toml     Copy to config.toml
@@ -105,6 +106,20 @@ Orb to core:
     keeps the model loaded; `audio.silence_seconds = 0.7` ends recording sooner.
   - Each turn logs `latency: stt .. s, llm first token .. s, first audio .. s, total .. s`
     (measured from the end of speech, after endpointing silence).
+
+## Tools and tool-call robustness
+
+Files: `list_dir`, `read_file`, `search_files`, `open_path`, `create_folder` (safe), `write_file` (safe when
+creating a new file; risky when overwriting or writing a program/script extension), `delete_path`, `move_path`.
+All file tools resolve paths with `paths.resolve_path`. `claude_code_history(folder, count)` reads the local
+Claude Code transcripts in `~/.claude/projects` (safe).
+
+- Tool calls written as text (`<tool_call>{...}</tool_call>`, fenced or bare JSON with name+arguments) are
+  recovered in `llm.finalize_response` / `Agent._recover_calls` (known tool names only). While streaming,
+  `ToolCallStreamFilter` keeps such text from being spoken.
+- Promise guard: a reply with no tool call that announces an action ("I'll check ...") gets a hidden
+  `(system)` nudge and the loop continues (max 2 per turn). Nudge exchanges are dropped from history.
+- Each turn logs the tools it executed.
 
 ## Safety model
 
