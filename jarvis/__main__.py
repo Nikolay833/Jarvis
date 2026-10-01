@@ -16,7 +16,7 @@ from typing import Any
 from . import fastpath
 from .agent import Agent, Confirmer
 from .bus import EventBus
-from .utterance import asks_question, sounds_unfinished
+from .utterance import asks_question, fix_names, sounds_unfinished
 from .config import Config, load_config, repo_root
 from .llm import LLMError, OllamaClient
 from .tools import load_all
@@ -68,7 +68,7 @@ class Assistant:
             self.wake = WakeWordDetector(cfg.wakeword.model, cfg.wakeword.threshold, self.mic, debug=debug_audio)
             self.recorder = Recorder(self.mic, a.silence_seconds, a.max_record_seconds, a.no_speech_timeout)
             w = cfg.whisper
-            self.stt = Transcriber(w.model, w.device, w.compute_type, w.fallback_model, w.language)
+            self.stt = Transcriber(w.model, w.device, w.compute_type, w.fallback_model, w.language, w.vocabulary)
             self.speaker = KokoroSpeaker(self.bus, cfg.tts.voice, cfg.tts.lang_code, cfg.tts.speed, a.output_device)
         else:
             from .audio.tts import ConsoleSpeaker
@@ -137,7 +137,10 @@ class Assistant:
                         self.recorder.last_reason, self.recorder.last_seconds)
             return ""
         t0 = time.perf_counter()
-        text = (await asyncio.to_thread(self.stt.transcribe, audio)).strip()
+        raw = (await asyncio.to_thread(self.stt.transcribe, audio)).strip()
+        text = fix_names(raw)
+        if text != raw:
+            log.info("corrected transcript: '%s' -> '%s'", raw, text)
         self._stt_secs = time.perf_counter() - t0
         log.info("heard: '%s' (stt %.1f s, audio %.1f s)", text, self._stt_secs, audio.size / 16000)
         return text

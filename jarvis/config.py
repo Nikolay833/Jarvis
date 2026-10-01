@@ -20,6 +20,10 @@ class OllamaConfig:
     max_reply_tokens: int = 200  # num_predict per LLM step; 0 = no limit
 
 
+# Words Whisper should expect to hear (names it otherwise mishears).
+DEFAULT_VOCABULARY = ["Jarvis", "Claude", "Claude Code", "Spotify", "Chrome", "Discord", "VS Code", "PowerShell"]
+
+
 @dataclass
 class WhisperConfig:
     model: str = "large-v3-turbo"
@@ -27,6 +31,7 @@ class WhisperConfig:
     compute_type: str = "float16"
     fallback_model: str = "small"
     language: str = "en"
+    vocabulary: list[str] = field(default_factory=lambda: list(DEFAULT_VOCABULARY))
 
 
 @dataclass

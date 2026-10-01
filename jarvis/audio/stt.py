@@ -13,8 +13,10 @@ log = logging.getLogger("jarvis.stt")
 class Transcriber:
     def __init__(self, model: str = "large-v3-turbo", device: str = "cuda",
                  compute_type: str = "float16", fallback_model: str = "small",
-                 language: str = "en") -> None:
+                 language: str = "en", vocabulary: list[str] | None = None) -> None:
         self.model_name = model
+        # Names Whisper should expect; it otherwise hears "Claude" as "cloud" or "Clyde".
+        self.prompt = ", ".join(vocabulary or []) + "." if vocabulary else None
         self.device = device
         self.compute_type = compute_type
         self.fallback_model = fallback_model
@@ -41,7 +43,7 @@ class Transcriber:
         self.load()
         segments, _info = self._model.transcribe(
             audio, language=self.language, beam_size=1, vad_filter=True,
-            condition_on_previous_text=False,
+            condition_on_previous_text=False, initial_prompt=self.prompt,
         )
         return " ".join(s.text.strip() for s in segments).strip()
 

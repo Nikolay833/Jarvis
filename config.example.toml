@@ -16,6 +16,8 @@ device = "cuda"          # "cuda" or "cpu"
 compute_type = "float16" # "float16" on GPU, "int8" on CPU
 fallback_model = "small" # used on CPU if the GPU load fails
 language = "en"
+# Names Whisper should expect to hear. Add your own project or app names here.
+vocabulary = ["Jarvis", "Claude", "Claude Code", "Spotify", "Chrome", "Discord", "VS Code", "PowerShell"]
 
 [tts]
 voice = "bm_george"      # Kokoro British male

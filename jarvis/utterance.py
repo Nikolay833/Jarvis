@@ -28,3 +28,19 @@ def sounds_unfinished(text: str) -> bool:
 def asks_question(reply: str) -> bool:
     """True if Jarvis's spoken reply ends by asking the user something."""
     return reply.strip().rstrip("\"')]").endswith("?")
+
+
+# Whisper's usual mishearings of "Claude". Rare words are always fixed; "cloud(s)" only
+# where the sentence is clearly about the assistant (so "cloud storage" stays intact).
+_CLAUDE_ALWAYS = re.compile(r"\b(?:clod|claud|clawed|clyde|klaud|klod|clause)\b", re.IGNORECASE)
+_CLOUD_CODE = re.compile(r"\bclouds?\s+code\b", re.IGNORECASE)
+_CLOUD_CONTEXT = re.compile(
+    r"\b(open|ask|tell|have|start|launch|message|text|asking|telling)\s+clouds?\b"
+    r"|\bclouds?(?=\s+(session|sessions|chat|chats|conversation|terminal|desktop|app|ai)\b)", re.IGNORECASE)
+
+
+def fix_names(text: str) -> str:
+    """Correct names Whisper commonly mishears (Claude)."""
+    t = _CLOUD_CODE.sub("Claude Code", text)
+    t = _CLAUDE_ALWAYS.sub("Claude", t)
+    return _CLOUD_CONTEXT.sub(lambda m: re.sub(r"(?i)clouds?", "Claude", m.group(0)), t)
