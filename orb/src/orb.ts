@@ -4,10 +4,10 @@ import type { OrbState } from "./protocol";
 // by 3D noise so the surface shows dark gaps and bright clusters.
 const HALO = "63, 216, 245";
 
-const SIZE = 320; // css px, canvas is square
-const R0 = 78; // resting sphere radius in css px (loud: wobbles out to ~100)
-const N_PARTICLES = 10000;
-const N_PARTICLES_2D = 2600;
+const SIZE = 260; // css px, canvas is square
+const R0 = 60; // resting sphere radius in css px (loud: wobbles out to ~78)
+const N_PARTICLES = 6500;
+const N_PARTICLES_2D = 1700;
 
 const TAU = Math.PI * 2;
 const clamp = (v: number, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, v));
@@ -165,7 +165,7 @@ void main(){
   if (rnd > 0.965) { col = SPEC; inten *= 1.15; }       // few near-white specks
   col = mix(col, ICE, clamp(b * 0.6, 0., 1.));
 
-  float size = 1.7 + 1.6 * r3 * r3 + (rnd > 0.985 ? 1.3 : 0.0) + 0.3 * rim;
+  float size = 1.45 + 1.4 * r3 * r3 + (rnd > 0.985 ? 1.1 : 0.0) + 0.25 * rim;
   float persp = CAM / (CAM - pos.z);
   gl_Position = vec4(pos.xy * persp * uR / uHalf, 0., 1.);
   gl_PointSize = max(size * persp * uDpr, 1.0);

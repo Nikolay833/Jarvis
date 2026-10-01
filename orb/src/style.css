@@ -33,15 +33,15 @@ body {
   flex-direction: column;
   align-items: center;
   justify-content: flex-end;
-  padding: 0 16px 20px;
+  padding: 0 16px 8px;
   pointer-events: none; /* only the pills take clicks */
 }
 
 #orb {
-  width: 320px;
-  height: 320px;
-  /* sphere is ~160-200px; the rest of the canvas is glow */
-  margin: -52px 0;
+  width: 260px;
+  height: 260px;
+  /* sphere is ~120-160px; the rest of the canvas is glow */
+  margin: -44px 0;
   flex: none;
 }
 
@@ -69,12 +69,14 @@ body {
 #actions {
   display: flex;
   gap: 10px;
-  height: 36px;
-  margin-top: 12px;
+  /* collapsed when hidden so the orb sits low; opens to make room for a confirm */
+  height: 0;
+  margin-top: 0;
+  overflow: hidden;
   opacity: 0;
   visibility: hidden;
   transform: translateY(6px);
-  transition: opacity 0.3s var(--ease), transform 0.3s var(--ease), visibility 0s 0.3s;
+  transition: opacity 0.3s var(--ease), transform 0.3s var(--ease), height 0.3s var(--ease), margin-top 0.3s var(--ease), visibility 0s 0.3s;
 }
 #actions .hint {
   align-self: center;
@@ -87,6 +89,9 @@ body {
   text-shadow: 0 1px 2px var(--scrim);
 }
 #actions.on {
+  height: 36px;
+  margin-top: 12px;
+  overflow: visible;
   opacity: 1;
   visibility: visible;
   transform: none;
