@@ -72,3 +72,33 @@ def test_negative_goes_to_llm(text):
 def test_normalize():
     assert normalize("  Hey Jarvis,  What's the TIME?! Please, sir. ") == "what's the time"
     assert normalize("It’s fine") == "it's fine"
+
+
+import pytest as _pytest  # noqa: E402
+
+
+@_pytest.mark.parametrize("text, project", [
+    ("What did Claude say?", ""),
+    ("what did claude say in the jarvis project", "jarvis"),
+    ("What's Claude doing on my AI on PC project?", "ai on pc"),
+    ("is claude done", ""),
+    ("Did Claude finish yet?", ""),
+    ("what was claude's last message", ""),
+    ("tell me what claude said", ""),
+])
+def test_claude_status_fast_path(text, project):
+    import json
+
+    from jarvis import fastpath
+
+    fp = fastpath.match(text)
+    assert fp is not None and fp.kind == "claude_status" and fp.speak_result
+    assert fp.action[1] == "claude_status" and json.loads(fp.action[2])["project"] == project
+
+
+@_pytest.mark.parametrize("text", ["ask claude what 11 times 12 is", "open claude", "tell claude to add tests"])
+def test_claude_requests_are_not_status(text):
+    from jarvis import fastpath
+
+    fp = fastpath.match(text)
+    assert fp is None or fp.kind != "claude_status"

@@ -546,3 +546,27 @@ def turn_seconds(transcript_path: str, now: float | None = None) -> float | None
 
 __all__ = ["Session", "Ranked", "scan_sessions", "load_session", "parse_session", "projects", "resolve_project",
            "find_sessions", "is_ambiguous", "format_line", "format_list", "humanize_age"]
+
+
+def _diagnose() -> None:
+    """`python -m jarvis.claude_sessions`: show what Jarvis can see of Claude's history."""
+    root = projects_dir()
+    files = sorted(root.glob("*/*.jsonl"), key=lambda f: f.stat().st_mtime, reverse=True) if root.is_dir() else []
+    print(f"Claude transcripts folder: {root} ({'found' if root.is_dir() else 'MISSING'})")
+    print(f"Transcript files: {len(files)}")
+    sessions = scan_sessions()
+    print(f"Sessions understood: {len(sessions)}")
+    now = time.time()
+    for s in sessions[:8]:
+        said = first_sentences(s.last_assistant_text, 1, 20) or "-"
+        print(f"- {s.project_name} | {s.label} | {humanize_age(now - s.last_activity)} | last said: {said}")
+    if files and not sessions:
+        f = files[0]
+        print(f"Could not read sessions. First lines of {f.name}:")
+        with open(f, encoding="utf-8", errors="replace") as fh:
+            for _, line in zip(range(3), fh):
+                print("  " + line[:300].rstrip())
+
+
+if __name__ == "__main__":
+    _diagnose()

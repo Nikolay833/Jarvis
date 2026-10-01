@@ -241,7 +241,8 @@ async def claude_code_run(folder: str, prompt: str) -> str:
     return f"Started Claude Code job {job.id} in {job.folder_name}. I will report when it finishes."
 
 
-@tool("Report the status of Claude Code jobs (all recent jobs, or one by id).")
+@tool("Status of background jobs that Jarvis itself started with claude_code_run (by id or all). NOT for the "
+      "user's own Claude sessions: for 'what did Claude say' or 'what is Claude doing' use claude_status.")
 def claude_code_status(job_id: str | None = None) -> str:
     """Claude Code job status.
 
@@ -254,7 +255,10 @@ def claude_code_status(job_id: str | None = None) -> str:
             raise ToolError(f"no job with id {job_id}")
         return _describe(job)
     if not jobs.jobs:
-        return "No Claude Code jobs"
+        # The model often reaches for this when the user means their own Claude session.
+        from .claude_sessions_tools import claude_status
+
+        return "Jarvis has started no background Claude jobs. Latest Claude session:\n" + claude_status()
     return "\n".join(_describe(j) for j in list(jobs.jobs.values())[-10:])
 
 

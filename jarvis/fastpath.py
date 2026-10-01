@@ -84,6 +84,15 @@ _M_WHAT = _re(r"(?:what(?:'s| is|s) (?:currently |now )?playing(?: right now| no
               r"what (?:song|track) is (?:this|playing|that)(?: right now| now)?|what am i listening to)")
 _PLAY_SPOTIFY = _re(_POLITE + r"play (.+?) (?:on|in|with|using) spotify")
 _SEARCH = _re(_POLITE + r"(?:search(?: for)?|google|look up) (.+?)(?: (?:in|on|using|with) (?:google )?chrome)?")
+# "what did Claude say", "what's Claude doing in the jarvis project", "is Claude done"
+_CLAUDE_STATUS = re.compile(
+    r"^(?:(?:what|whats|what's|what has|what did|what is)\b.*\bclaude\b.*\b(?:say|said|saying|answer|answered|"
+    r"reply|replied|respond|responded|write|wrote|last message|doing|up to|done)"
+    r"|(?:is|did|has) claude (?:done|finish|finished|finish(?:ed)? (?:yet|working)|done yet)"
+    r"|(?:tell me |read me )?(?:what )?claude(?:'s| last)? (?:said|answer|reply|last message))"
+    r"(?P<rest>.*)$")
+_PROJECT_IN = re.compile(r"\b(?:in|on|for|from|with) (?:the |my )?(?P<project>[a-z0-9][a-z0-9 ._-]*?)(?: project| session| folder)?$")
+
 _SEARCH_OTHER_SITE = re.compile(r" (?:on|in|at) (?:youtube|amazon|ebay|reddit|github|wikipedia|twitter|netflix|"
                                 r"spotify|maps|google maps|facebook|instagram|linkedin|bing)$")
 
@@ -141,6 +150,12 @@ def match(text: str, now: datetime | None = None) -> FastPath | None:
     if m:
         song = m.group(1).strip()
         return FastPath("music", f"Playing {song} on Spotify, sir.", _call("spotify_play", query=song),
+                        speak_result=True)
+    m = _CLAUDE_STATUS.match(t)
+    if m:
+        pm = _PROJECT_IN.search(m.group("rest") or "")
+        project = pm.group("project").strip() if pm else ""
+        return FastPath("claude_status", "Let me check, sir.", _call("claude_status", project=project),
                         speak_result=True)
     m = _SEARCH.match(t)
     if m:

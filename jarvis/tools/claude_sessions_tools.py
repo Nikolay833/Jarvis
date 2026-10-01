@@ -158,7 +158,7 @@ def claude_new_session(project: str = "", prompt: str = "", name: str = "") -> s
 
 @tool("Report what Claude Code is doing or whether it finished: for the matching or most recently active session "
       "gives project, how long ago it was active, busy or waiting or done, what Claude last said, the last tool, "
-      "and any pending permission request. Use for 'what is Claude doing' and 'is Claude done'.")
+      "and any pending permission request. Use for 'what did Claude say', 'what is Claude doing', 'is Claude done'.")
 def claude_status(project: str = "", topic: str = "") -> str:
     """Status of a Claude session.
 
