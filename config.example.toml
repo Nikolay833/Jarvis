@@ -1,0 +1,52 @@
+# Copy to config.toml (repo root) or %APPDATA%\Jarvis\config.toml.
+# Every key is optional; values below are the defaults.
+
+[ollama]
+url = "http://127.0.0.1:11434"
+model = "qwen3:14b"
+think = false          # ask Ollama to skip qwen3 thinking (faster replies)
+timeout = 120.0        # seconds per LLM request
+num_ctx = 8192
+keep_alive = "30m"
+
+[whisper]
+model = "large-v3-turbo"
+device = "cuda"          # "cuda" or "cpu"
+compute_type = "float16" # "float16" on GPU, "int8" on CPU
+fallback_model = "small" # used on CPU if the GPU load fails
+language = "en"
+
+[tts]
+voice = "bm_george"      # Kokoro British male
+lang_code = "b"          # "b" = British English
+speed = 1.0
+
+[wakeword]
+model = "hey_jarvis"
+threshold = 0.5          # 0..1, raise if it triggers by accident
+
+[audio]
+input_device = ""        # empty = system default (name or index)
+output_device = ""
+silence_seconds = 1.0    # end of speech
+max_record_seconds = 20.0
+no_speech_timeout = 6.0  # give up if nobody speaks after the wake word
+
+[bus]
+host = "127.0.0.1"
+port = 8765
+
+[safety]
+confirm_timeout = 30.0   # seconds; no answer counts as "no"
+
+[agent]
+max_steps = 8
+max_history_messages = 30
+
+[claude_code]
+binary = "claude"        # name on PATH or full path to claude / claude.cmd
+permission_mode = "acceptEdits"
+
+[files]
+# Optional. If non-empty, file tools only work inside these folders.
+allowed_roots = []       # e.g. ["C:/Users/you/Documents", "D:/Projects"]

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Jarvis Orb</title>
+  </head>
+  <body>
+    <main id="stage">
+      <canvas id="orb" aria-hidden="true"></canvas>
+      <p id="caption" role="status" aria-live="polite"></p>
+      <div id="actions" role="group" aria-label="Confirm action" inert>
+        <button id="approve" type="button">Approve</button>
+        <button id="deny" type="button">Deny</button>
+      </div>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
