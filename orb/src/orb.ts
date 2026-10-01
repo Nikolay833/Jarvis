@@ -1,15 +1,13 @@
 import type { OrbState } from "./protocol";
 
-// Look: small pale-mint dots on the shell, big soft balls inside with a vertical
-// colour gradient (cyan top, lime bottom, lavender/pink accents).
-const HALO = "90, 225, 205";
+// Look: one dense, grainy sphere of cyan light particles. Density is modulated
+// by 3D noise so the surface shows dark gaps and bright clusters.
+const HALO = "63, 216, 245";
 
 const SIZE = 320; // css px, canvas is square
 const R0 = 78; // resting sphere radius in css px (loud: wobbles out to ~100)
-const N_SURFACE = 3200;
-const N_INNER = 340;
-const N_SURFACE_2D = 900;
-const N_INNER_2D = 170;
+const N_PARTICLES = 10000;
+const N_PARTICLES_2D = 2600;
 
 const TAU = Math.PI * 2;
 const clamp = (v: number, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, v));
@@ -28,7 +26,7 @@ interface Frame {
   bright: number; // overall brightness
   radius: number; // css px
   vis: number; // fade 0..1
-  level: number; // audio level 0..1 (inner balls expand)
+  level: number; // audio level 0..1 (slight swell)
 }
 
 interface Renderer {
@@ -37,49 +35,65 @@ interface Renderer {
 }
 
 // ---------------------------------------------------------------------------
-// Point clouds
+// Particle cloud
 
-/** Fibonacci sphere: [x, y, z, rand] per point. */
-function fibonacci(n: number): Float32Array {
-  const out = new Float32Array(n * 4);
-  const ga = Math.PI * (3 - Math.sqrt(5));
-  for (let i = 0; i < n; i++) {
-    const y = 1 - ((i + 0.5) * 2) / n;
-    const r = Math.sqrt(1 - y * y);
-    const th = i * ga;
-    out[i * 4] = Math.cos(th) * r;
-    out[i * 4 + 1] = y;
-    out[i * 4 + 2] = Math.sin(th) * r;
-    out[i * 4 + 3] = Math.random();
-  }
-  return out;
+function hash3(x: number, y: number, z: number): number {
+  const h = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453;
+  return h - Math.floor(h);
 }
 
-/** Random points in a ball, biased toward the centre: [x, y, z, rand]. */
-function ball(n: number): Float32Array {
+/** Smooth value noise in [0, 1]. */
+function vnoise(x: number, y: number, z: number): number {
+  const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
+  const fx = x - xi, fy = y - yi, fz = z - zi;
+  const u = fx * fx * (3 - 2 * fx), v = fy * fy * (3 - 2 * fy), w = fz * fz * (3 - 2 * fz);
+  const l = (a: number, b: number, t: number) => a + (b - a) * t;
+  const c = (dx: number, dy: number, dz: number) => hash3(xi + dx, yi + dy, zi + dz);
+  return l(
+    l(l(c(0, 0, 0), c(1, 0, 0), u), l(c(0, 1, 0), c(1, 1, 0), u), v),
+    l(l(c(0, 0, 1), c(1, 0, 1), u), l(c(0, 1, 1), c(1, 1, 1), u), v),
+    w,
+  );
+}
+
+/**
+ * Random particles, mostly in a thin fuzzy shell plus some volume fill.
+ * Candidates are accepted by noise-modulated probability, so clumps and gaps
+ * are baked into the positions and rotate with the sphere. [x, y, z, rand].
+ */
+function particles(n: number): Float32Array {
   const out = new Float32Array(n * 4);
-  for (let i = 0; i < n; i++) {
+  const ox = Math.random() * 50, oy = Math.random() * 50, oz = Math.random() * 50;
+  let i = 0;
+  while (i < n) {
     const u = Math.random() * 2 - 1;
     const th = Math.random() * TAU;
     const s = Math.sqrt(1 - u * u);
-    const r = 0.88 * Math.pow(Math.random(), 0.72);
-    out[i * 4] = Math.cos(th) * s * r;
-    out[i * 4 + 1] = u * r;
-    out[i * 4 + 2] = Math.sin(th) * s * r;
+    const dx = Math.cos(th) * s, dy = u, dz = Math.sin(th) * s;
+    const dens = 0.6 * vnoise(dx * 3.2 + ox, dy * 3.2 + oy, dz * 3.2 + oz) + 0.4 * vnoise(dx * 7 + oy, dy * 7 + oz, dz * 7 + ox);
+    if (Math.random() > clamp((dens - 0.2) * 3.0, 0.08, 1)) continue;
+    const k = Math.random();
+    let r: number;
+    if (k < 0.1) r = Math.cbrt(Math.random()) * 0.85; // volume fill
+    else if (k < 0.15) r = 1.03 + Math.random() * 0.1; // stray particles outside
+    else r = 1.03 - 0.18 * Math.pow(Math.random(), 1.7); // shell
+    out[i * 4] = dx * r;
+    out[i * 4 + 1] = dy * r;
+    out[i * 4 + 2] = dz * r;
     out[i * 4 + 3] = Math.random();
+    i++;
   }
   return out;
 }
 
 // ---------------------------------------------------------------------------
-// WebGL renderer: two draws per frame (inner balls, shell dots).
+// WebGL renderer: one draw call per frame.
 
 const VERT = /* glsl */ `
 attribute vec4 aP;
-uniform float uT, uFlow, uRot, uAmp, uRip, uThink, uBand, uBright, uR, uDpr, uHalf, uInner, uLvl;
+uniform float uT, uFlow, uRot, uAmp, uRip, uThink, uBand, uBright, uR, uDpr, uHalf, uLvl;
 varying vec3 vCol;
 varying float vA;
-varying float vK;
 
 vec3 mod289(vec3 x){return x-floor(x*(1./289.))*289.;}
 vec4 mod289(vec4 x){return x-floor(x*(1./289.))*289.;}
@@ -113,13 +127,10 @@ vec3 view(vec3 v){
   return vec3(v.x, ct*v.y - st*v.z, st*v.y + ct*v.z);
 }
 
-const vec3 MINT = vec3(0.74, 0.95, 0.60);
-const vec3 MINT_HI = vec3(0.88, 1.0, 0.78);
-const vec3 SKY = vec3(0.31, 0.85, 1.0);     // #4fd8ff
-const vec3 TEAL = vec3(0.30, 0.78, 0.86);
-const vec3 LIME = vec3(0.49, 1.0, 0.54);    // #7dff8a
-const vec3 LAV = vec3(0.79, 0.65, 1.0);     // #c9a7ff
-const vec3 PINK = vec3(1.0, 0.60, 0.835);   // #ff9ad5
+const vec3 TEAL = vec3(0.14, 0.62, 0.74);
+const vec3 CYAN = vec3(0.18, 0.84, 0.96);   // ~#2fd6f5
+const vec3 ICE  = vec3(0.48, 0.91, 1.0);    // ~#7ae8ff
+const vec3 SPEC = vec3(0.78, 0.97, 1.0);
 const float CAM = 3.4;
 
 void main(){
@@ -127,54 +138,34 @@ void main(){
   float rnd = aP.w;
   float r2 = fract(rnd * 91.7);
   float r3 = fract(rnd * 37.3);
-  vec3 pos; float size; float inten; vec3 col;
-  vK = uInner;
+  vec3 dir = normalize(p + 1e-4);
+  float rl = length(p);
 
-  if (uInner < 0.5) {
-    // ---- shell: small crisp pale dots
-    float n  = snoise(p * 1.05 + vec3(0., 0., uFlow));
-    float n2 = snoise(p * 2.1 + vec3(uFlow * 1.7, 3.1, 0.));
-    float d = uAmp * (0.75 * n + 0.25 * n2);
-    d += uRip * sin(acos(clamp(p.y, -1., 1.)) * 8.0 - uT * 5.0) * (0.55 + 0.45 * n);
-    pos = view(p * (1.0 + d));
-    float f = view(p).z;                   // + toward viewer
-    float rim = 1.0 - abs(f);
-    float crest = smoothstep(0.02, 0.3, d);
+  float n  = snoise(dir * 1.05 + vec3(0., 0., uFlow));
+  float n2 = snoise(dir * 2.1 + vec3(uFlow * 1.7, 3.1, 0.));
+  float d = uAmp * (0.75 * n + 0.25 * n2);
+  d += uRip * sin(acos(clamp(dir.y, -1., 1.)) * 8.0 - uT * 5.0) * (0.55 + 0.45 * n);
+  // tiny per-particle shimmer so the surface feels alive without moving the clumps
+  vec3 jit = vec3(sin(uT * 0.7 + rnd * 60.), cos(uT * 0.6 + rnd * 90.), sin(uT * 0.8 + rnd * 40.)) * 0.006;
+  vec3 pos = view((p + jit) * (1.0 + d + uLvl * 0.035));
 
-    inten = 0.42 + 0.55 * pow(rim, 2.0) + 0.3 * crest;
-    if (f < 0.0) inten *= 0.5;
-    size = (1.65 + 0.55 * rim) * (0.9 + 0.2 * r3);
+  float f = view(dir).z;                       // + toward viewer
+  float rim = 1.0 - abs(f);
+  float inten = (0.7 + 0.7 * r3) * (0.7 + 0.7 * pow(rim, 2.0));
+  if (f < 0.0) inten *= 0.6;
+  inten *= mix(0.55, 1.0, smoothstep(0.5, 1.0, rl));  // volume fill is dimmer
 
-    // thinking: soft brightness wave sweeping over the shell
-    float bp = fract(uBand) * 3.2 - 1.6;
-    float b = exp(-pow((pos.y + 0.45 * pos.x - bp) * 3.0, 2.0)) * uThink;
-    inten += b * 1.1;
-    col = mix(MINT, MINT_HI, clamp(pow(rim, 3.0) + b + crest * 0.5, 0., 1.));
-  } else {
-    // ---- inner: big soft balls
-    float rad = length(p);
-    float prog = fract(rnd * 7.0 - uT * 0.16);     // inward travel while thinking
-    float k = mix(1.0, 1.0 - prog * 0.8, uThink);
-    vec3 pp = p * k;
-    pp = rotY(pp, uThink * prog * 4.0 * (1.3 - rad));  // swirl, tighter near the core
-    pp += vec3(sin(uT * 0.31 + rnd * 40.), cos(uT * 0.27 + rnd * 70.), sin(uT * 0.33 + rnd * 23.)) * 0.05;
-    float nn = snoise(normalize(p + 1e-4) * 1.05 + vec3(0., 0., uFlow));
-    pp *= 1.0 + uLvl * 0.2 + uAmp * 0.5 * nn;        // expand with the voice
-    pos = view(pp);
-    float tw = 0.5 + 0.5 * sin(uT * (0.8 + 1.6 * r2) + rnd * 80.);
-    float life = mix(1.0, sin(3.14159 * prog), uThink);
-    float depth = 0.55 + 0.45 * clamp(pos.z * 0.6 + 0.5, 0., 1.);
-    inten = (0.95 + 0.2 * tw) * life * depth;
-    size = (7.0 + 8.0 * pow(r3, 1.6)) * (1.0 + 0.06 * uLvl * tw);
+  // thinking: soft brightness wave sweeping over the particles
+  float bp = fract(uBand) * 3.2 - 1.6;
+  float b = exp(-pow((pos.y + 0.45 * pos.x - bp) * 3.0, 2.0)) * uThink;
+  inten += b * 0.55;
 
-    // vertical gradient on screen: lime bottom, teal middle, cyan top
-    float g = clamp(pos.y / 0.88 * 0.5 + 0.5 + (r2 - 0.5) * 0.18, 0., 1.);
-    col = mix(LIME, TEAL, smoothstep(0.18, 0.5, g));
-    col = mix(col, SKY, smoothstep(0.45, 0.8, g));
-    if (r3 > 0.85) col = mix(col, r2 < 0.5 ? LAV : PINK, 0.85);  // ~15% lavender / pink accents
-    col = clamp(col + (fract(rnd * 53.1) - 0.5) * 0.1, 0., 1.);
-  }
+  vec3 col = mix(TEAL, CYAN, smoothstep(0.0, 0.5, r2));
+  col = mix(col, ICE, smoothstep(0.55, 1.0, r2) * 0.8);
+  if (rnd > 0.965) { col = SPEC; inten *= 1.15; }       // few near-white specks
+  col = mix(col, ICE, clamp(b * 0.6, 0., 1.));
 
+  float size = 1.7 + 1.6 * r3 * r3 + (rnd > 0.985 ? 1.3 : 0.0) + 0.3 * rim;
   float persp = CAM / (CAM - pos.z);
   gl_Position = vec4(pos.xy * persp * uR / uHalf, 0., 1.);
   gl_PointSize = max(size * persp * uDpr, 1.0);
@@ -187,13 +178,12 @@ const FRAG = /* glsl */ `
 precision mediump float;
 varying vec3 vCol;
 varying float vA;
-varying float vK;
 void main(){
-  float d = length(gl_PointCoord - 0.5) * 2.0;
-  float s = vK < 0.5
-    ? exp(-d * d * 4.2) * (1.0 - smoothstep(0.85, 1.0, d))          // crisp dot
-    : pow(1.0 - smoothstep(0.38, 1.0, d), 1.3);                    // soft ball
+  vec2 q = gl_PointCoord - 0.5;
+  float d = length(q) * 2.0;
+  float s = (1.0 - smoothstep(0.35, 1.0, d));
   vec3 c = vCol * (s * vA);
+  c = 1.0 - exp(-c * 1.7);   // soft tone curve: dense clusters stay cyan instead of clipping white
   // Premultiplied output: alpha must be >= every channel so additive blending
   // on a transparent window never turns grey at the edges.
   gl_FragColor = vec4(c, max(c.r, max(c.g, c.b)));
@@ -203,11 +193,9 @@ void main(){
 class GLRenderer implements Renderer {
   private readonly gl: WebGLRenderingContext;
   private prog!: WebGLProgram;
-  private surf!: WebGLBuffer;
-  private inner!: WebGLBuffer;
+  private buf!: WebGLBuffer;
   private loc!: { a: number; u: Record<string, WebGLUniformLocation | null> };
-  private readonly surfData = fibonacci(N_SURFACE);
-  private readonly innerData = ball(N_INNER);
+  private readonly data = particles(N_PARTICLES);
   private lost = false;
 
   constructor(private readonly canvas: HTMLCanvasElement, private readonly dpr: number) {
@@ -252,23 +240,17 @@ class GLRenderer implements Renderer {
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error("link: " + gl.getProgramInfoLog(prog));
     this.prog = prog;
     const u: Record<string, WebGLUniformLocation | null> = {};
-    for (const n of ["uT", "uFlow", "uRot", "uAmp", "uRip", "uThink", "uBand", "uBright", "uR", "uDpr", "uHalf", "uInner", "uLvl"]) {
+    for (const n of ["uT", "uFlow", "uRot", "uAmp", "uRip", "uThink", "uBand", "uBright", "uR", "uDpr", "uHalf", "uLvl"]) {
       u[n] = gl.getUniformLocation(prog, n);
     }
     this.loc = { a: gl.getAttribLocation(prog, "aP"), u };
-    this.surf = this.buffer(this.surfData);
-    this.inner = this.buffer(this.innerData);
+    this.buf = gl.createBuffer()!;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
+    gl.bufferData(gl.ARRAY_BUFFER, this.data, gl.STATIC_DRAW);
     gl.disable(gl.DEPTH_TEST);
     gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE); // additive, premultiplied
     gl.clearColor(0, 0, 0, 0);
-  }
-
-  private buffer(data: Float32Array): WebGLBuffer {
-    const { gl } = this;
-    const b = gl.createBuffer()!;
-    gl.bindBuffer(gl.ARRAY_BUFFER, b);
-    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-    return b;
   }
 
   clear(): void {
@@ -296,31 +278,18 @@ class GLRenderer implements Renderer {
     gl.uniform1f(u.uHalf, SIZE / 2);
     gl.uniform1f(u.uLvl, f.level);
     gl.enableVertexAttribArray(loc.a);
-
-    // Inner balls first: premultiplied "over" keeps the dense centre saturated
-    // instead of blowing out to white.
-    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    gl.uniform1f(u.uInner, 1);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.inner);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
     gl.vertexAttribPointer(loc.a, 4, gl.FLOAT, false, 0, 0);
-    gl.drawArrays(gl.POINTS, 0, N_INNER);
-
-    // Shell dots on top, additive.
-    gl.blendFunc(gl.ONE, gl.ONE);
-    gl.uniform1f(u.uInner, 0);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.surf);
-    gl.vertexAttribPointer(loc.a, 4, gl.FLOAT, false, 0, 0);
-    gl.drawArrays(gl.POINTS, 0, N_SURFACE);
+    gl.drawArrays(gl.POINTS, 0, N_PARTICLES);
   }
 }
 
 // ---------------------------------------------------------------------------
-// Canvas 2D fallback: same look, fewer dots, cheap sine "noise".
+// Canvas 2D fallback: same look, fewer particles, cheap sine "noise".
 
 class Canvas2DRenderer implements Renderer {
   private readonly ctx: CanvasRenderingContext2D;
-  private readonly surf = fibonacci(N_SURFACE_2D);
-  private readonly inner = ball(N_INNER_2D);
+  private readonly data = particles(N_PARTICLES_2D);
 
   constructor(canvas: HTMLCanvasElement, dpr: number) {
     canvas.width = Math.round(SIZE * dpr);
@@ -350,55 +319,29 @@ class Canvas2DRenderer implements Renderer {
     return [SIZE / 2 + x1 * persp * f.radius, SIZE / 2 - y2 * persp * f.radius, z2, persp];
   }
 
-  private static ball(g: number, r2: number, r3: number): string {
-    const L = [125, 255, 138], T = [76, 199, 219], S = [79, 216, 255];
-    const mix = (a: number[], b: number[], t: number) => a.map((v, i) => v + (b[i] - v) * t);
-    const sm = (a: number, b: number, x: number) => {
-      const t = clamp((x - a) / (b - a));
-      return t * t * (3 - 2 * t);
-    };
-    let c = mix(L, T, sm(0.18, 0.5, g));
-    c = mix(c, S, sm(0.45, 0.8, g));
-    if (r3 > 0.85) c = mix(c, r2 < 0.5 ? [201, 167, 255] : [255, 154, 213], 0.85);
-    return c.map(Math.round).join(",");
-  }
-
   render(f: Frame): void {
     const { ctx } = this;
     ctx.clearRect(0, 0, SIZE, SIZE);
-    const A = f.bright * f.vis;
-    // inner balls (source-over keeps colours saturated)
-    for (let i = 0; i < N_INNER_2D; i++) {
-      const o = i * 4;
-      const r = this.inner[o + 3], r2 = (r * 91.7) % 1, r3 = (r * 37.3) % 1;
-      const k = 1 + f.level * 0.2;
-      const [px, py, pz, persp] = this.proj(this.inner[o] * k, this.inner[o + 1] * k, this.inner[o + 2] * k, f);
-      const g = clamp(((SIZE / 2 - py) / f.radius / 0.88) * 0.5 + 0.5);
-      const rad = ((6 + 8 * r3 ** 1.6) / 2) * persp;
-      const a = clamp((0.9 + 0.1 * Math.sin(f.t + r * 80)) * (0.55 + 0.45 * clamp(pz * 0.6 + 0.5)) * A);
-      const col = Canvas2DRenderer.ball(g, r2, r3);
-      const gr = ctx.createRadialGradient(px, py, 0, px, py, rad);
-      gr.addColorStop(0, `rgba(${col},${a})`);
-      gr.addColorStop(0.4, `rgba(${col},${a * 0.6})`);
-      gr.addColorStop(1, `rgba(${col},0)`);
-      ctx.fillStyle = gr;
-      ctx.fillRect(px - rad, py - rad, rad * 2, rad * 2);
-    }
-    // shell dots, additive
     ctx.globalCompositeOperation = "lighter";
+    const A = f.bright * f.vis;
     const bp = (f.band % 1) * 3.2 - 1.6;
-    for (let i = 0; i < N_SURFACE_2D; i++) {
-      const x = this.surf[i * 4], y = this.surf[i * 4 + 1], z = this.surf[i * 4 + 2];
-      const d = f.amp * Canvas2DRenderer.noise(x, y, z, f.flow * 2) + f.rip * Math.sin(Math.acos(y) * 8 - f.t * 5);
-      const k = 1 + d;
-      const nz = this.proj(x, y, z, f)[2];
+    for (let i = 0; i < N_PARTICLES_2D; i++) {
+      const o = i * 4;
+      const x = this.data[o], y = this.data[o + 1], z = this.data[o + 2], rnd = this.data[o + 3];
+      const rl = Math.hypot(x, y, z);
+      const dx = x / rl, dy = y / rl, dz = z / rl;
+      const d = f.amp * Canvas2DRenderer.noise(dx, dy, dz, f.flow * 2) + f.rip * Math.sin(Math.acos(dy) * 8 - f.t * 5);
+      const k = 1 + d + f.level * 0.035;
+      const nz = this.proj(dx, dy, dz, f)[2];
       const [px, py, , persp] = this.proj(x * k, y * k, z * k, f);
       const rim = 1 - Math.abs(nz);
-      let a = 0.42 + 0.55 * rim ** 2;
-      if (nz < 0) a *= 0.5;
-      a += f.think * 1.1 * Math.exp(-(((SIZE / 2 - py) / f.radius + 0.45 * ((px - SIZE / 2) / f.radius) - bp) ** 2) * 9);
-      const s = (1.7 + 0.5 * rim) * persp;
-      ctx.fillStyle = `rgba(189,242,153,${clamp(a * A)})`;
+      const r3 = (rnd * 37.3) % 1;
+      let a = (0.7 + 0.7 * r3) * (0.7 + 0.7 * rim ** 2);
+      if (nz < 0) a *= 0.6;
+      if (rl < 0.85) a *= 0.55;
+      a += f.think * 0.55 * Math.exp(-(((SIZE / 2 - py) / f.radius + 0.45 * ((px - SIZE / 2) / f.radius) - bp) ** 2) * 9);
+      const s = (1.7 + 1.6 * r3 * r3) * persp;
+      ctx.fillStyle = rnd > 0.965 ? `rgba(199,247,255,${clamp(a * A)})` : `rgba(${r3 > 0.6 ? "122,232,255" : "47,214,245"},${clamp(a * A * 0.9)})`;
       ctx.fillRect(px - s / 2, py - s / 2, s, s);
     }
     ctx.globalCompositeOperation = "source-over";

@@ -1,10 +1,10 @@
 :root {
-  /* One accent: cyan-green (orb: mint shell, cyan/lime balls). */
-  --accent: #63e6c6;
-  --accent-deep: #0b4a46;
+  /* One accent: cyan (orb: cyan particle sphere). */
+  --accent: #3fd8f5;
+  --accent-deep: #0b4a5c;
   --ink: #e6f1ff;
   --ink-dim: #9db8d9;
-  --on-accent: #03201c; /* 11:1 on --accent */
+  --on-accent: #032028; /* 11:1 on --accent */
   --scrim: rgb(4 10 24 / 0.72);
   --radius: 999px; /* shape lock: every interactive surface is a pill */
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
@@ -117,7 +117,7 @@ button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
   background: var(--accent);
   border: 1px solid var(--accent);
 }
-#approve:hover { background: #8ff0d8; }
+#approve:hover { background: #7ae8ff; }
 
 #deny {
   color: var(--ink);
