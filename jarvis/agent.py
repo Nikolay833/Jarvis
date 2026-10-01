@@ -35,7 +35,7 @@ For coding work in a project folder, use claude_code_run. For simple PC question
 When the user asks you to do something on the PC, call the tool in this same response; never say you will do it later. Only reply in text after the tool results arrive, reporting what actually happened.
 To read out the last messages of a Claude conversation word for word, use claude_code_history. To make folders or files, use create_folder and write_file.
 For music use music_control (pause, resume, next, previous, stop), spotify_now_playing and spotify_play; for windows use window_action (minimize, maximize, restore, focus, close) and minimize_all; for Chrome profiles or searching in Chrome use open_chrome (chrome_profiles lists profiles).
-Claude Code sessions: to open or resume an existing session ("open the login bug session in Jarvis") use claude_open_session(topic, project); if it returns a question listing sessions, say it exactly as given, and after the user answers call it again with choice=N. "Continue where I left off in X" -> claude_continue. "New Claude session for X" or "ask Claude to do X in project Y" -> claude_new_session (the task goes in prompt). "What did Claude say", "what is Claude doing", "is Claude done", "did Claude finish" -> claude_status (never claude_code_status, which only covers jobs Jarvis started). "List my Claude sessions" -> claude_sessions. "Ask that session X and tell me the answer" -> claude_ask_session (only when the answer should be spoken; otherwise open the session). Confirm in one short sentence, e.g. "Opening the login bug session, sir."
+Only use Claude tools when the user mentions Claude or a Claude session; a bare "open X" means an app, folder or file, and if X is unclear ask "Open what, sir?". Claude Code sessions: to open or resume an existing session ("open the login bug session in Jarvis") use claude_open_session(topic, project); for "my last/latest Claude session" pass topic "latest"; if it returns a question listing sessions, say it exactly as given, and after the user answers call it again with choice=N. "Continue where I left off in X" -> claude_continue. "New Claude session for X" or "ask Claude to do X in project Y" -> claude_new_session (the task goes in prompt). "What did Claude say", "what is Claude doing", "is Claude done", "did Claude finish" -> claude_status (never claude_code_status, which only covers jobs Jarvis started). "List my Claude sessions" -> claude_sessions. "Ask that session X and tell me the answer" -> claude_ask_session (only when the answer should be spoken; otherwise open the session). Confirm in one short sentence, e.g. "Opening the login bug session, sir."
 For a plain "ask Claude" or "tell Claude" request with no project or session, use claude_terminal (opens a visible terminal running Claude with the request), then say in one short sentence that Claude is on it. Only if the user explicitly wants you to read Claude's answer back, use claude_chat instead and relay the answer faithfully; claude_chat_list and claude_chat_history manage those chats. claude_code_run is for silent background coding jobs.
 After using tools, report the outcome in one short sentence. If a tool fails, say so plainly and suggest the next step."""
 
@@ -43,6 +43,14 @@ NUDGE = "(system) You announced an action but did not call a tool. Call the appr
 MAX_NUDGES = 2
 
 # Slow tools: say this short line before running, so the user is not left in silence.
+# Tools that open or message Claude. They only run when the user actually talked about Claude
+# (this turn, or the previous Jarvis reply was about Claude, e.g. "which session?" -> "the second").
+CLAUDE_ACTION_TOOLS = {"claude_open_session", "claude_continue", "claude_new_session", "claude_terminal",
+                       "claude_ask_session", "claude_chat", "claude_chat_new", "claude_code_run"}
+_CLAUDE_WORDS = re.compile(r"\b(claude|claude's|session|sessions)\b", re.IGNORECASE)
+CLAUDE_GUARD_MSG = ("Not done: the user did not mention Claude, so do not open or message Claude. "
+                    "Ask the user in one short sentence what they want, e.g. 'Open what, sir?'")
+
 SLOW_TOOL_NOTICE = {"claude_chat": "Asking Claude, sir.", "claude_chat_new": "Asking Claude, sir.",
                     "claude_ask_session": "Asking that session, sir."}
 
@@ -203,6 +211,8 @@ class Agent:
         self.first_audio_at: float | None = None  # perf_counter of the first spoken audio, if streamed
         self.streamed = False  # True if the last handle() already spoke its reply via the stream
         self.sessions: dict[str, list[dict[str, Any]]] = {}
+        self._turn_text = ""  # the user's words this turn (for the Claude guard)
+        self._prev_reply = ""  # Jarvis's previous reply (a question about Claude lets "the second one" through)
 
     # ---- memory ----------------------------------------------------------
     def history(self, session: str) -> list[dict[str, Any]]:
@@ -301,6 +311,11 @@ class Agent:
         return LLMResponse(content=content, tool_calls=calls, raw_tool_calls=[])
 
     # ---- main loop -------------------------------------------------------
+    def _claude_in_context(self) -> bool:
+        if _CLAUDE_WORDS.search(self._turn_text):
+            return True
+        return bool(self._prev_reply and _CLAUDE_WORDS.search(self._prev_reply))
+
     async def handle(self, text: str, session: str = "default", speaker: Any = None) -> str:
         """Run one turn and return the reply text.
 
@@ -308,6 +323,7 @@ class Agent:
         the LLM generates; `self.streamed` is then True and the caller must not speak it again.
         """
         msgs = self.history(session)
+        self._turn_text = text
         msgs.append({"role": "user", "content": text})
         self.trim(session)
         msgs = self.history(session)
@@ -375,6 +391,7 @@ class Agent:
                 self.streamed = out.pushed > 0
                 self.first_audio_at = out.first_audio_at
         self.trim(session)
+        self._prev_reply = reply
         return reply
 
     def _drop_dangling_user(self, session: str) -> None:
@@ -391,6 +408,9 @@ class Agent:
         tool = self.registry.get(name)
         if tool is None:
             return f"Error: unknown tool '{name}'"
+        if name in CLAUDE_ACTION_TOOLS and not self._claude_in_context():
+            log.info("blocked %s: user did not mention Claude ('%s')", name, self._turn_text[:80])
+            return CLAUDE_GUARD_MSG
         assessment = safety.classify_call(name, args, tool.risk)
         if assessment.is_risky:
             summary = safety.describe_call(name, args)

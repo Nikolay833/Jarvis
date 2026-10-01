@@ -84,9 +84,11 @@ def test_open_session_project_filter_disambiguates(world, opened):
     assert opened[0]["args"] == ["--resume", "j-login"] and opened[0]["folder"] == str(jarvis)
 
 
-def test_open_session_empty_topic_most_recent(world, opened):
+def test_open_session_empty_topic_asks_latest_opens(world, opened):
     jarvis, site = world
-    cst.claude_open_session()
+    question = cst.claude_open_session()
+    assert opened == [] and question.startswith("Which session, sir?")
+    cst.claude_open_session(topic="latest")
     assert opened[-1]["args"] == ["--resume", "s-login"]
     cst.claude_open_session(project="jarvis")
     assert opened[-1]["args"] == ["--resume", "j-dark"]

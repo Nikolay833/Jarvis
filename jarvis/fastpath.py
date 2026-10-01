@@ -84,6 +84,7 @@ _M_WHAT = _re(r"(?:what(?:'s| is|s) (?:currently |now )?playing(?: right now| no
               r"what (?:song|track) is (?:this|playing|that)(?: right now| now)?|what am i listening to)")
 _PLAY_SPOTIFY = _re(_POLITE + r"play (.+?) (?:on|in|with|using) spotify")
 _SEARCH = _re(_POLITE + r"(?:search(?: for)?|google|look up) (.+?)(?: (?:in|on|using|with) (?:google )?chrome)?")
+_OPEN_WHAT = re.compile(r"^(?:open|open it|open up|open the|open a|open my|open that|launch|start)$")
 # "what did Claude say", "what's Claude doing in the jarvis project", "is Claude done"
 _CLAUDE_STATUS = re.compile(
     r"^(?:(?:what|whats|what's|what has|what did|what is)\b.*\bclaude\b.*\b(?:say|said|saying|answer|answered|"
@@ -151,6 +152,8 @@ def match(text: str, now: datetime | None = None) -> FastPath | None:
         song = m.group(1).strip()
         return FastPath("music", f"Playing {song} on Spotify, sir.", _call("spotify_play", query=song),
                         speak_result=True)
+    if _OPEN_WHAT.match(t):
+        return FastPath("clarify", "Open what, sir?")
     m = _CLAUDE_STATUS.match(t)
     if m:
         pm = _PROJECT_IN.search(m.group("rest") or "")

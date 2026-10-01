@@ -103,11 +103,21 @@ def claude_open_session(topic: str = "", project: str = "", prompt: str = "", ch
     """Resume a Claude session.
 
     Args:
-        topic: What the session was about, e.g. "login bug". Empty means the most recent one.
+        topic: What the session was about, e.g. "login bug", or "latest" for the most recent one. Leave empty only if the user named no topic; the tool then asks which session.
         project: Project name or folder, e.g. "Jarvis".
         prompt: Optional message to send into the session right away.
         choice: 1, 2 or 3 to pick from the list offered by an earlier call; 0 otherwise.
     """
+    latest = topic.strip().lower() in _LATEST_WORDS
+    if latest:
+        topic = ""
+    if not topic.strip() and not project.strip() and not int(choice or 0) and not latest:
+        newest = cs.scan_sessions()[:1]
+        if not newest:
+            return "I found no Claude sessions, sir. Shall I start a new one?"
+        n = newest[0]
+        return (f"Which session, sir? Your latest is '{n.label}' in {n.project_name}, "
+                f"{cs.humanize_age(time.time() - n.last_activity)}. Shall I open that one, or start a new one?")
     s, question = _pick(topic, project, int(choice))
     if s is None:
         return question
@@ -116,6 +126,9 @@ def claude_open_session(topic: str = "", project: str = "", prompt: str = "", ch
     open_claude_terminal(s.project_dir, prompt, ["--resume", s.id])
     _offer["ids"] = []
     return f"Opened the session '{s.label}' in {s.project_name}" + (" with your message." if prompt.strip() else ".")
+
+
+_LATEST_WORDS = {"last", "latest", "recent", "most recent", "previous", "newest", "last one", "the last one"}
 
 
 @tool("Continue the most recent Claude Code conversation in a project (like 'continue where I left off in "

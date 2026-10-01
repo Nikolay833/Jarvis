@@ -58,7 +58,7 @@ def test_volume():
     "what time is it in tokyo", "what time is the meeting", "what time does the shop close",
     "remind me what time it is at five", "the time machine",
     "open chrome and search for cats", "open the pod bay doors", "open my downloads folder",
-    "open", "open chrome tabs", "start a timer for five minutes",
+    "open chrome tabs", "start a timer for five minutes",
     "lock the door", "lock the pc in ten minutes", "unlock the pc",
     "stop the timer", "cancel my subscription", "stop it from raining",
     "what day is my birthday", "what is the date of the next holiday",
