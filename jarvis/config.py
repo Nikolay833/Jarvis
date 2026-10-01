@@ -26,12 +26,33 @@ DEFAULT_VOCABULARY = ["Jarvis", "Claude", "Claude Code", "Spotify", "Chrome", "D
 
 @dataclass
 class WhisperConfig:
-    model: str = "large-v3-turbo"
+    model: str = "large-v3"
     device: str = "cuda"
     compute_type: str = "float16"
     fallback_model: str = "small"
     language: str = "en"
     vocabulary: list[str] = field(default_factory=lambda: list(DEFAULT_VOCABULARY))
+    beam_size: int = 5  # 1 = greedy (fastest), 5 = noticeably more accurate
+    best_of: int = 5  # candidates when the temperature fallback samples
+    temperature: list[float] = field(default_factory=lambda: [0.0, 0.2, 0.4])  # retry ladder on bad decodes
+    vad_filter: bool = True
+    vad_min_silence_ms: int = 500
+    vad_speech_pad_ms: int = 300  # padding keeps VAD from clipping word starts
+    condition_on_previous_text: bool = False
+    no_speech_threshold: float = 0.6
+    log_prob_threshold: float = -1.0
+    use_hotwords: bool = True  # also pass the vocabulary as hotwords (faster-whisper >= 1.0)
+
+
+@dataclass
+class STTConfig:
+    engine: str = "whisper"  # "whisper" or "parakeet"
+
+
+@dataclass
+class ParakeetConfig:
+    model: str = "nemo-parakeet-tdt-0.6b-v2"  # v2 = English, "nemo-parakeet-tdt-0.6b-v3" = multilingual
+    device: str = "cuda"  # "cuda" (falls back to CPU) or "cpu"
 
 
 @dataclass
@@ -107,7 +128,9 @@ class FilesConfig:
 @dataclass
 class Config:
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
+    stt: STTConfig = field(default_factory=STTConfig)
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
+    parakeet: ParakeetConfig = field(default_factory=ParakeetConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
     wakeword: WakeWordConfig = field(default_factory=WakeWordConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)

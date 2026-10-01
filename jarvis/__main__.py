@@ -62,7 +62,7 @@ class Assistant:
         if voice:
             from .audio.mic import MicStream
             from .audio.recorder import Recorder
-            from .audio.stt import Transcriber
+            from .audio.stt import make_transcriber
             from .audio.tts import KokoroSpeaker
             from .audio.wakeword import WakeWordDetector
 
@@ -70,8 +70,7 @@ class Assistant:
             self.mic = MicStream(a.input_device)
             self.wake = WakeWordDetector(cfg.wakeword.model, cfg.wakeword.threshold, self.mic, debug=debug_audio)
             self.recorder = Recorder(self.mic, a.silence_seconds, a.max_record_seconds, a.no_speech_timeout)
-            w = cfg.whisper
-            self.stt = Transcriber(w.model, w.device, w.compute_type, w.fallback_model, w.language, w.vocabulary)
+            self.stt = make_transcriber(cfg)
             self.speaker = KokoroSpeaker(self.bus, cfg.tts.voice, cfg.tts.lang_code, cfg.tts.speed, a.output_device)
         else:
             from .audio.tts import ConsoleSpeaker
@@ -118,7 +117,7 @@ class Assistant:
         jobs = [warm_llm()]
         if self.voice:
             jobs += [timed("wake word", self.wake.load),
-                     warm("whisper", self.stt.load, self.stt.warm_up),
+                     warm("stt", self.stt.load, self.stt.warm_up),
                      warm("tts", self.speaker.load, self.speaker.warm_up)]
         await asyncio.gather(*jobs)
         log.info("startup warm-up done in %.1f s", time.perf_counter() - t_all)

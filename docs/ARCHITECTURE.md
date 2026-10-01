@@ -30,7 +30,7 @@ microphone ──► wake word ──► record until silence ──► STT ─�
 | Part | Library | Notes |
 |---|---|---|
 | Wake word | `openwakeword` | Pretrained `hey_jarvis` model. CPU. |
-| Speech to text | `faster-whisper` | `large-v3-turbo` on CUDA, float16. Fallback `small` on CPU. |
+| Speech to text | `faster-whisper` (default) or `onnx-asr` Parakeet | `[stt] engine`. Whisper `large-v3`, beam 5, float16 on CUDA; fallback `small` on CPU. Parakeet TDT 0.6B v2 via onnxruntime (optional). Engines in `audio/stt.py`; `python -m jarvis.stt_bench` compares them. |
 | LLM | Ollama HTTP API (`/api/chat`) | Default model `qwen3:14b`. Native tool calling. |
 | Text to speech | `kokoro` | Voice `bm_george` (British male), 24 kHz. |
 | Audio I/O | `sounddevice` | One persistent 16 kHz mono `MicStream` (`audio/mic.py`) opened at startup; wake word and recorder both read from it, with a 1.5 s pre-roll ring. |
@@ -44,7 +44,8 @@ jarvis/                 Python package (the core)
   __main__.py           `python -m jarvis` entry point
   config.py             Loads config.toml (falls back to defaults)
   bus.py                WebSocket event server
-  audio/                wakeword.py, recorder.py, stt.py, tts.py
+  audio/                wakeword.py, recorder.py, stt.py (whisper + parakeet engines), tts.py
+  stt_bench.py          `python -m jarvis.stt_bench`: compare STT engines on your recordings
   llm.py                Ollama chat client with tool calling (non-streaming `chat`, streaming `chat_stream`)
   fastpath.py           LLM-free answers for time/date/open app/lock/stop/volume, minimise/maximise, music keys, "play X on spotify", "search for X" (strict anchored regexes; "close X" is never a fast path)
   agent.py              Conversation loop: messages, tool calls, confirmations
@@ -96,7 +97,7 @@ Orb to core:
 - Feedback: chime on wake/hotkey (its energy is ignored for endpointing), "Online, sir." at
   startup, spoken apologies for empty transcripts ("Sorry sir, I didn't catch that.") and failed turns.
 - Startup warm-up in parallel: Ollama model load (empty `/api/chat`, same `num_ctx`/`keep_alive`),
-  Whisper on 1 s silence, Kokoro "Ready.". Ollama unreachable gives a WARNING and a spoken hint.
+  the STT engine on 1 s silence, Kokoro "Ready.". Ollama unreachable gives a WARNING and a spoken hint.
 - Logs: INFO per stage with timings (wake score, stt, llm steps, reply, tts first audio) to the
   console and `logs/jarvis.log` (rotating 1 MB x 3). `--debug-audio` prints mic RMS and wake score.
 - Latency (target: first audio < 1.5 s after end of speech for simple requests):

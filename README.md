@@ -38,6 +38,16 @@ restart Ollama (quit it from the tray and reopen) for them to apply. Tunables ar
 `config.example.toml` (`ollama.max_reply_tokens`, `ollama.keep_alive`, `audio.silence_seconds`,
 `agent.fast_paths`, `agent.stream_replies`).
 
+## Speech to text
+
+Default: faster-whisper `large-v3`, beam 5, VAD with padding, vocabulary as prompt and hotwords
+(`[whisper]` in config). Faster but less accurate: `model = "large-v3-turbo"`, `beam_size = 1`.
+Alternative: NVIDIA Parakeet TDT 0.6B. Install with `pip install "onnx-asr[gpu,hub]"` (or run
+`setup_windows.ps1 -Parakeet`), then set `[stt] engine = "parakeet"`.
+Compare engines on your own voice and mic: `python -m jarvis.stt_bench` (records 4 phrases to
+`logs/stt_bench/`, then prints engine / time / transcript per phrase) or
+`python -m jarvis.stt_bench --files a.wav b.wav`.
+
 ## More commands
 
 - Windows: "minimise Chrome", "maximise VS Code", "show the desktop", "focus Spotify", "close Notepad"

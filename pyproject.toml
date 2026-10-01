@@ -23,6 +23,8 @@ dependencies = [
 config = ["tomli-w"]
 # Lets "play <song> on Spotify" press Play through UI Automation (optional; falls back to a key press).
 ui = ["pywinauto; sys_platform == 'win32'"]
+# Optional NVIDIA Parakeet STT engine ([stt] engine = "parakeet").
+parakeet = ["onnx-asr[gpu,hub]"]
 dev = ["pytest"]
 
 [project.scripts]

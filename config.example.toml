@@ -10,14 +10,31 @@ num_ctx = 8192
 keep_alive = "-1"         # "-1" = never unload the model; or a duration like "30m"
 max_reply_tokens = 200  # cap per LLM step (num_predict); 0 = no limit
 
+[stt]
+engine = "whisper"       # "whisper" (faster-whisper) or "parakeet" (needs: pip install "onnx-asr[gpu,hub]")
+
 [whisper]
-model = "large-v3-turbo"
+model = "large-v3"       # "large-v3-turbo" is faster but less accurate
 device = "cuda"          # "cuda" or "cpu"
 compute_type = "float16" # "float16" on GPU, "int8" on CPU
 fallback_model = "small" # used on CPU if the GPU load fails
 language = "en"
 # Names Whisper should expect to hear. Add your own project or app names here.
 vocabulary = ["Jarvis", "Claude", "Claude Code", "Spotify", "Chrome", "Discord", "VS Code", "PowerShell"]
+beam_size = 5            # 1 = greedy (fastest), 5 = more accurate
+best_of = 5
+temperature = [0.0, 0.2, 0.4]  # retry ladder when a decode looks bad
+vad_filter = true
+vad_min_silence_ms = 500
+vad_speech_pad_ms = 300  # padding stops VAD clipping the start of words
+condition_on_previous_text = false
+no_speech_threshold = 0.6
+log_prob_threshold = -1.0
+use_hotwords = true      # also pass the vocabulary as hotwords (faster-whisper >= 1.0)
+
+[parakeet]
+model = "nemo-parakeet-tdt-0.6b-v2"  # English; "nemo-parakeet-tdt-0.6b-v3" is multilingual
+device = "cuda"          # falls back to CPU if the GPU provider fails
 
 [tts]
 voice = "bm_george"      # Kokoro British male

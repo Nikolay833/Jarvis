@@ -1,8 +1,9 @@
 # Jarvis setup for Windows 11 / 10. Run from the repo root or anywhere:
-#   powershell -ExecutionPolicy Bypass -File scripts\setup_windows.ps1 [-Model qwen3:14b]
+#   powershell -ExecutionPolicy Bypass -File scripts\setup_windows.ps1 [-Model qwen3:14b] [-Parakeet]
 param(
     [string]$Model = "qwen3:14b",
-    [string]$Python = "py -3.11"
+    [string]$Python = "py -3.11",
+    [switch]$Parakeet  # also install the optional NVIDIA Parakeet STT engine (onnx-asr)
 )
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
@@ -23,6 +24,10 @@ Write-Host "==> Installing Jarvis"
 & $Py -m pip install -e ".[dev]"
 # faster-whisper needs ctranslate2 >= 4.5 (CUDA 12 + cuDNN 9).
 & $Py -m pip install --upgrade "ctranslate2>=4.5"
+if ($Parakeet) {
+    Write-Host "==> Installing Parakeet STT (onnx-asr)"
+    & $Py -m pip install "onnx-asr[gpu,hub]"
+}
 
 Write-Host "==> Downloading wake word models"
 & $Py -c "import openwakeword; openwakeword.utils.download_models(['hey_jarvis'])"
