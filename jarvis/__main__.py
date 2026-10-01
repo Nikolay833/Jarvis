@@ -344,8 +344,9 @@ class Assistant:
             try:
                 self.mic.start()
             except Exception as exc:  # noqa: BLE001
-                log.error("cannot open the microphone: %s", exc)
-                raise SystemExit(2) from None
+                log.error("cannot open the microphone (%s); check Windows sound settings or "
+                          "audio.input_device in config.toml", exc)
+                raise
         await self.warm_up()
         bg = [asyncio.create_task(self.dispatch_bus())]
         if repl:
@@ -395,7 +396,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--config", help="path to config.toml")
     p.add_argument("--text", action="store_true", help="keyboard REPL, no audio (implies --no-voice)")
     p.add_argument("--no-voice", action="store_true", help="do not load audio models; bus and text input only")
-    p.add_argument("--list-devices", action="store_true", help="print audio devices and exit")
     p.add_argument("--debug-audio", action="store_true",
                    help="print mic level and wake word score twice a second")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -424,11 +424,6 @@ def setup_logging(verbose: bool = False) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    if args.list_devices:
-        from .audio.mic import list_devices
-
-        print(list_devices())
-        return
     setup_logging(args.verbose)
     cfg = load_config(args.config)
     voice = not (args.text or args.no_voice)
