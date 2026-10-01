@@ -1,3 +1,4 @@
+import pytest
 import asyncio
 
 from jarvis.agent import Agent, Confirmer, parse_yes_no
@@ -184,3 +185,21 @@ def test_strip_think():
     assert strip_think("Hello") == "Hello"
     assert strip_think("<think>unclosed") == ""
     assert strip_think("stray</think> ok") == "ok"
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("do not do it", False),
+        ("hold on", False),
+        ("wait", False),
+        ("please", None),
+        ("do it", True),
+        ("yeah go ahead", True),
+        ("of course", True),
+    ],
+)
+def test_parse_yes_no_negation_and_phrases(text, expected):
+    from jarvis.agent import parse_yes_no
+
+    assert parse_yes_no(text) is expected

@@ -33,18 +33,22 @@ For coding work in a project folder, use claude_code_run. For simple PC question
 After using tools, report the outcome in one short sentence. If a tool fails, say so plainly and suggest the next step."""
 
 _YES = {"yes", "yeah", "yep", "yup", "sure", "proceed", "approve", "approved", "confirm", "confirmed",
-        "affirmative", "ok", "okay", "go", "do", "please"}
-_NO = {"no", "nope", "nah", "stop", "cancel", "deny", "denied", "negative", "don't", "dont", "abort", "never"}
+        "affirmative", "ok", "okay", "absolutely", "certainly", "correct", "accept", "accepted"}
+_YES_PHRASES = ("go ahead", "do it", "go for it", "of course", "carry on", "make it so", "sounds good")
+_NO = {"no", "nope", "nah", "stop", "cancel", "deny", "denied", "negative", "don't", "dont", "abort", "never",
+       "not", "wait", "reject", "rejected", "decline", "declined"}
+_NO_PHRASES = ("hold on", "hang on", "leave it", "forget it")
 
 
 def parse_yes_no(text: str) -> bool | None:
-    """True for yes, False for no, None if unclear. 'no' wins over 'yes' when both appear."""
+    """True for yes, False for no, None if unclear. Any no-word wins, so "do not do it" is no."""
     words = re.findall(r"[a-z']+", text.lower())
     if not words:
         return None
-    if any(w in _NO for w in words):
+    joined = " ".join(words)
+    if any(w in _NO for w in words) or any(p in joined for p in _NO_PHRASES):
         return False
-    if any(w in _YES for w in words) or "go ahead" in " ".join(words):
+    if any(w in _YES for w in words) or any(p in joined for p in _YES_PHRASES):
         return True
     return None
 
@@ -86,8 +90,12 @@ class Confirmer:
         while not fut.done():
             text = await self.listen()
             verdict = parse_yes_no(text or "")
-            if verdict is not None and not fut.done():
+            if fut.done():
+                return
+            if verdict is not None:
                 fut.set_result(verdict)
+            elif text:
+                await self.speak("Sorry sir, was that a yes or a no?")
 
     async def ask(self, summary: str) -> bool:
         cid = uuid.uuid4().hex[:8]
@@ -97,7 +105,7 @@ class Confirmer:
         await self.bus.emit("confirm", id=cid, summary=summary)
         voice_task: asyncio.Task | None = None
         try:
-            await self.speak(f"Sir, I'm about to {summary}. Shall I proceed?")
+            await self.speak(f"Sir, I'm about to {summary}. Shall I proceed? Say yes or no.")
             if self.listen is not None and not fut.done():
                 voice_task = asyncio.create_task(self._voice_loop(fut))
             try:
