@@ -29,6 +29,15 @@ Jarvis plays a soft chime when it starts listening, says "Online, sir." when rea
 `logs/jarvis.log`. If nothing happens, run `python -m jarvis --debug-audio` to see the
 live mic level and wake score (twice a second).
 
+## Speed
+
+Replies stream into speech sentence by sentence, simple requests (time, date, "open chrome",
+"lock the pc", "stop", volume) skip the LLM, and each turn logs a `latency:` line. `setup_windows.ps1`
+sets the user environment variables `OLLAMA_FLASH_ATTENTION=1` and `OLLAMA_KV_CACHE_TYPE=q8_0`;
+restart Ollama (quit it from the tray and reopen) for them to apply. Tunables are in
+`config.example.toml` (`ollama.max_reply_tokens`, `ollama.keep_alive`, `audio.silence_seconds`,
+`agent.fast_paths`, `agent.stream_replies`).
+
 ## Safety
 
 Reading, listing and opening things run at once. Deleting, moving, installing,

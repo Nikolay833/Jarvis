@@ -12,22 +12,25 @@ from datetime import datetime
 from typing import Any, Awaitable, Callable
 
 from . import safety
-from .llm import LLM, LLMError
+from .audio.tts import SentenceBuffer
+from .llm import LLM, LLMError, LLMResponse
 from .tools.registry import Registry
 
 log = logging.getLogger("jarvis.agent")
 
 MAX_TOOL_RESULT_CHARS = 4000
 
+# Fully static (no clock): the Ollama KV cache can reuse system prompt + tool schemas every turn.
+# The current date/time goes in the newest user message instead (see Agent._with_now).
 SYSTEM_PROMPT = """You are Jarvis, a personal assistant living on the user's Windows PC.
 Persona: a polite, dry-witted British butler. Address the user as "sir".
-Your replies are spoken aloud, so: one to three short sentences, plain words, no markdown, no lists, no emoji, no URLs read out in full.
+Your replies are spoken aloud: answer in one or two short sentences unless the user asks for detail. Plain words only: no markdown, no lists, no emoji, no URLs read out in full.
+The newest user message starts with a line like "[Now: Wednesday 01 October 2026, 18:42]" giving the current date and time; use it when needed and never read it back unprompted.
 Use the tools to act on the PC; never claim to have done something you did not do with a tool.
 If a request is ambiguous and a wrong guess could do harm, ask one short question first.
 Risky tools (deleting, installing, stopping things, running Claude Code) ask the user for approval automatically; just call the tool.
 For coding work in a project folder, use claude_code_run. For simple PC questions, use system_info or run_powershell.
-After using tools, report the outcome briefly. If a tool fails, say so plainly and suggest the next step.
-Current date and time: {now}."""
+After using tools, report the outcome in one short sentence. If a tool fails, say so plainly and suggest the next step."""
 
 _YES = {"yes", "yeah", "yep", "yup", "sure", "proceed", "approve", "approved", "confirm", "confirmed",
         "affirmative", "ok", "okay", "go", "do", "please"}
@@ -112,15 +115,44 @@ class Confirmer:
         return approved
 
 
+class _Out:
+    """Lazy speaker stream for one turn: opened on the first sentence, so silent turns open none."""
+
+    def __init__(self, speaker: Any) -> None:
+        self.speaker = speaker
+        self.stream: Any = None
+        self.pushed = 0
+        self.first_audio_at: float | None = None
+
+    def push(self, sentence: str) -> None:
+        if self.stream is None:
+            self.stream = self.speaker.start_stream()
+        self.pushed += 1
+        self.stream.push(sentence)
+
+    async def finish(self) -> None:
+        stream, self.stream = self.stream, None
+        if stream is not None:
+            try:
+                await stream.finish()
+            finally:
+                if self.first_audio_at is None:
+                    self.first_audio_at = getattr(stream, "first_audio_at", None)
+
+
 class Agent:
     def __init__(self, llm: LLM, registry: Registry, bus: Any, confirmer: Confirmer,
-                 max_steps: int = 8, max_history: int = 30) -> None:
+                 max_steps: int = 8, max_history: int = 30, stream_replies: bool = True) -> None:
         self.llm = llm
         self.registry = registry
         self.bus = bus
         self.confirmer = confirmer
         self.max_steps = max_steps
         self.max_history = max_history
+        self.stream_replies = stream_replies
+        self.timing: dict[str, float | None] = {}
+        self.first_audio_at: float | None = None  # perf_counter of the first spoken audio, if streamed
+        self.streamed = False  # True if the last handle() already spoke its reply via the stream
         self.sessions: dict[str, list[dict[str, Any]]] = {}
 
     # ---- memory ----------------------------------------------------------
@@ -145,20 +177,88 @@ class Agent:
         self.sessions[session] = msgs
 
     def _system(self) -> dict[str, str]:
-        return {"role": "system", "content": SYSTEM_PROMPT.format(now=datetime.now().strftime("%A %d %B %Y, %H:%M"))}
+        return {"role": "system", "content": SYSTEM_PROMPT}
+
+    @staticmethod
+    def now_prefix(now: datetime | None = None) -> str:
+        return (now or datetime.now()).strftime("[Now: %A %d %B %Y, %H:%M]\n")
+
+    @staticmethod
+    def _with_now(msgs: list[dict[str, Any]], prefix: str) -> list[dict[str, Any]]:
+        """Copy of `msgs` with `prefix` on the newest user message. History itself stays unprefixed."""
+        out = list(msgs)
+        for i in range(len(out) - 1, -1, -1):
+            if out[i].get("role") == "user":
+                out[i] = {**out[i], "content": prefix + str(out[i].get("content", ""))}
+                break
+        return out
+
+    def add_exchange(self, user_text: str, reply: str, session: str = "default") -> None:
+        """Record a turn answered without the LLM (fast path) so follow-ups have context."""
+        msgs = self.history(session)
+        msgs.append({"role": "user", "content": user_text})
+        if reply:
+            msgs.append({"role": "assistant", "content": reply})
+        else:
+            msgs.pop()
+        self.trim(session)
+
+    async def _step(self, wire: list[dict[str, Any]], tools: list[dict[str, Any]],
+                    out: "_Out | None") -> LLMResponse:
+        """One LLM step. Streams when possible, speaking each finished sentence of a plain reply."""
+        chat_stream = getattr(self.llm, "chat_stream", None)
+        if chat_stream is None or out is None or not self.stream_replies:
+            resp = await self.llm.chat(wire, tools)
+            if self.timing.get("first_token") is None:
+                self.timing["first_token"] = time.perf_counter()
+            return resp
+        buf = SentenceBuffer()
+        final: LLMResponse | None = None
+        try:
+            async for item in chat_stream(wire, tools):
+                if isinstance(item, LLMResponse):
+                    final = item
+                    break
+                if self.timing.get("first_token") is None:
+                    self.timing["first_token"] = time.perf_counter()
+                for sentence in buf.feed(item):
+                    out.push(sentence)
+        except LLMError:
+            if out.pushed:
+                raise  # already speaking: a retry would repeat words
+            log.warning("streaming failed, falling back to non-streaming chat", exc_info=True)
+            return await self.llm.chat(wire, tools)
+        if final is None:
+            raise LLMError("stream ended without a final message")
+        if final.tool_calls:
+            buf.discard()  # tool step: do not speak the unfinished remainder
+        else:
+            for sentence in buf.flush():
+                out.push(sentence)
+        return final
 
     # ---- main loop -------------------------------------------------------
-    async def handle(self, text: str, session: str = "default") -> str:
+    async def handle(self, text: str, session: str = "default", speaker: Any = None) -> str:
+        """Run one turn and return the reply text.
+
+        With a `speaker` (needs `start_stream()`), the reply is spoken sentence by sentence while
+        the LLM generates; `self.streamed` is then True and the caller must not speak it again.
+        """
         msgs = self.history(session)
         msgs.append({"role": "user", "content": text})
         self.trim(session)
         msgs = self.history(session)
         tools = self.registry.schemas()
+        prefix = self.now_prefix()
+        out = _Out(speaker) if speaker is not None else None
+        self.timing = {"start": time.perf_counter(), "first_token": None}
+        self.streamed = False
+        self.first_audio_at = None
         reply = ""
         try:
             for step in range(1, self.max_steps + 1):
                 t0 = time.perf_counter()
-                resp = await self.llm.chat([self._system(), *msgs], tools)
+                resp = await self._step([self._system(), *self._with_now(msgs, prefix)], tools, out)
                 took = time.perf_counter() - t0
                 if resp.tool_calls:
                     log.info("llm step %d: tool calls %s (%.1f s)", step, [c.name for c in resp.tool_calls], took)
@@ -174,17 +274,30 @@ class Agent:
                 msgs.append(assistant)
                 if not resp.tool_calls:
                     reply = resp.content or "Very good, sir."
+                    if out is not None and not out.pushed:
+                        out.push(reply)  # empty content: speak the fallback
                     break
+                if out is not None:
+                    await out.finish()  # free the speaker (a confirmation may need it)
                 for call in resp.tool_calls:
                     result = await self._run_tool(call.name, call.arguments)
                     msgs.append({"role": "tool", "tool_name": call.name, "content": result})
             else:
                 reply = "My apologies, sir, that took more steps than I allow myself. Shall I carry on?"
                 msgs.append({"role": "assistant", "content": reply})
+                if out is not None:
+                    out.push(reply)
         except LLMError as exc:
             log.error("LLM failure: %s", exc)
             reply = "I am afraid my thinking engine is unavailable, sir. Is Ollama running?"
             self._drop_dangling_user(session)
+            if out is not None:
+                out.push(reply)
+        finally:
+            if out is not None:
+                await out.finish()
+                self.streamed = out.pushed > 0
+                self.first_audio_at = out.first_audio_at
         self.trim(session)
         return reply
 

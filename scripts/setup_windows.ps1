@@ -39,6 +39,12 @@ if (Get-Command ollama -ErrorAction SilentlyContinue) {
     Write-Warning "Ollama not found. Install it from https://ollama.com/download, then run: ollama pull $Model"
 }
 
+Write-Host "==> Setting Ollama speed options (user environment variables)"
+# Flash attention + q8 KV cache: faster prompt processing, about half the KV cache VRAM.
+[Environment]::SetEnvironmentVariable("OLLAMA_FLASH_ATTENTION", "1", "User")
+[Environment]::SetEnvironmentVariable("OLLAMA_KV_CACHE_TYPE", "q8_0", "User")
+Write-Warning "Ollama must be restarted to pick these up: quit it from the system tray and reopen it."
+
 if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
     Write-Warning "Claude Code CLI not found on PATH (only needed for the Claude Code tools). Set claude_code.binary in config.toml."
 }

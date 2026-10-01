@@ -45,7 +45,8 @@ jarvis/                 Python package (the core)
   config.py             Loads config.toml (falls back to defaults)
   bus.py                WebSocket event server
   audio/                wakeword.py, recorder.py, stt.py, tts.py
-  llm.py                Ollama chat client with tool calling
+  llm.py                Ollama chat client with tool calling (non-streaming `chat`, streaming `chat_stream`)
+  fastpath.py           LLM-free answers for time/date/open app/lock/stop/volume (strict anchored regexes)
   agent.py              Conversation loop: messages, tool calls, confirmations
   safety.py             Risk classification of tool calls
   tools/                Tool registry + tools (system, files, apps, claude_code)
@@ -91,7 +92,19 @@ Orb to core:
   Whisper on 1 s silence, Kokoro "Ready.". Ollama unreachable gives a WARNING and a spoken hint.
 - Logs: INFO per stage with timings (wake score, stt, llm steps, reply, tts first audio) to the
   console and `logs/jarvis.log` (rotating 1 MB x 3). `--debug-audio` prints mic RMS and wake score.
-- The system prompt carries the local date/time, rebuilt on every LLM call.
+- Latency (target: first audio < 1.5 s after end of speech for simple requests):
+  - The system prompt is fully static so Ollama's KV cache keeps system prompt + tool schemas
+    between turns. The date/time is a `[Now: ...]` line prefixed to the newest user message on the
+    wire only; history is stored without it.
+  - `OllamaClient.chat_stream` (NDJSON, `<think>` stripped across chunk boundaries). The agent pushes each
+    finished sentence of a plain reply to `speaker.start_stream()` (`push(sentence)`, `await finish()`);
+    Kokoro synthesizes sentence N+1 while N plays. Tool steps are never spoken (unfinished text is
+    dropped). Streaming errors fall back to non-streaming `chat`.
+  - `fastpath.match` runs before the agent (`agent.fast_paths`); fast-path turns are still added to history.
+  - Replies are short by prompt and capped by `ollama.max_reply_tokens` (num_predict); `keep_alive = "-1"`
+    keeps the model loaded; `audio.silence_seconds = 0.7` ends recording sooner.
+  - Each turn logs `latency: stt .. s, llm first token .. s, first audio .. s, total .. s`
+    (measured from the end of speech, after endpointing silence).
 
 ## Safety model
 

@@ -16,7 +16,8 @@ class OllamaConfig:
     think: bool = False
     timeout: float = 120.0
     num_ctx: int = 8192
-    keep_alive: str = "30m"
+    keep_alive: str = "-1"  # "-1" = keep the model loaded forever (sent as int -1); or e.g. "30m"
+    max_reply_tokens: int = 200  # num_predict per LLM step; 0 = no limit
 
 
 @dataclass
@@ -45,7 +46,7 @@ class WakeWordConfig:
 class AudioConfig:
     input_device: str = ""
     output_device: str = ""
-    silence_seconds: float = 1.0
+    silence_seconds: float = 0.7
     max_record_seconds: float = 20.0
     no_speech_timeout: float = 6.0
     announce_ready: bool = True  # say "Online, sir." after startup
@@ -67,6 +68,8 @@ class SafetyConfig:
 class AgentConfig:
     max_steps: int = 8
     max_history_messages: int = 30
+    fast_paths: bool = True  # answer time/date/open app/lock/stop without the LLM
+    stream_replies: bool = True  # speak sentences while the LLM is still generating
 
 
 @dataclass

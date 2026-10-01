@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from . import fastpath
 from .agent import Agent, Confirmer
 from .bus import EventBus
 from .config import Config, load_config, repo_root
@@ -47,6 +48,8 @@ class Assistant:
         self.speaker: Any = None
         self.mic: Any = None
         self.llm_ok = False
+        self._stt_secs = 0.0
+        self._first_audio: float | None = None
 
         if voice:
             from .audio.mic import MicStream
@@ -68,12 +71,13 @@ class Assistant:
             self.speaker = ConsoleSpeaker(self.bus)
 
         self.llm = OllamaClient(cfg.ollama.url, cfg.ollama.model, cfg.ollama.think,
-                                cfg.ollama.timeout, cfg.ollama.num_ctx, cfg.ollama.keep_alive)
+                                cfg.ollama.timeout, cfg.ollama.num_ctx, cfg.ollama.keep_alive,
+                                cfg.ollama.max_reply_tokens)
         self.confirmer = Confirmer(self.bus, self.speaker.speak, cfg.safety.confirm_timeout,
                                    listen=self.listen_text if voice else None)
         set_context(cfg, self.bus, self.announce)
         self.agent = Agent(self.llm, load_all(), self.bus, self.confirmer,
-                           cfg.agent.max_steps, cfg.agent.max_history_messages)
+                           cfg.agent.max_steps, cfg.agent.max_history_messages, cfg.agent.stream_replies)
 
     # ---- audio helpers ---------------------------------------------------
     async def warm_up(self) -> None:
@@ -123,7 +127,8 @@ class Assistant:
             return ""
         t0 = time.perf_counter()
         text = (await asyncio.to_thread(self.stt.transcribe, audio)).strip()
-        log.info("heard: '%s' (stt %.1f s, audio %.1f s)", text, time.perf_counter() - t0, audio.size / 16000)
+        self._stt_secs = time.perf_counter() - t0
+        log.info("heard: '%s' (stt %.1f s, audio %.1f s)", text, self._stt_secs, audio.size / 16000)
         return text
 
     def _chime(self) -> None:
@@ -165,9 +170,57 @@ class Assistant:
                 self.bus.emit_nowait("state", state="idle")
 
     # ---- one turn --------------------------------------------------------
+    async def run_fast(self, fp: fastpath.FastPath, text: str) -> None:
+        """Answer a fast-path command without the LLM (see fastpath.py)."""
+        if fp.stop_speaking:
+            self.speaker.stop()
+            return
+        self.agent.add_exchange(text, fp.reply)
+        self.bus.emit_nowait("state", state="speaking")
+        action = asyncio.create_task(self._fast_action(fp)) if fp.action else None
+        stream = self.speaker.start_stream()
+        stream.push(fp.reply)
+        self._first_audio = stream.first_audio_at
+        await stream.finish()
+        self._first_audio = stream.first_audio_at
+        if action is not None:
+            err = await action
+            if err:
+                await self.say_safe(f"I am afraid that failed, sir. {err}")
+
+    async def _fast_action(self, fp: fastpath.FastPath) -> str:
+        """Run the side effect of a fast path. Returns an error text, or '' on success."""
+        from .tools import system
+
+        kind = fp.action[0]
+        try:
+            if kind == "volume":
+                await asyncio.to_thread(system.press_volume_key, fp.action[1])
+                return ""
+            args = {"name": fp.action[1]} if kind == "open_app" else {}
+            result = await self.agent.registry.call(kind, args)
+            return result[:120] if result.startswith("Error:") else ""
+        except Exception as exc:  # noqa: BLE001
+            log.exception("fast path action failed")
+            return str(exc)[:120]
+
+    def _log_latency(self, t_heard: float, t_llm_start: float | None, first_token: float | None,
+                     first_audio: float | None) -> None:
+        now = time.perf_counter()
+        t_heard -= self._stt_secs  # measure from the end of speech: transcription is part of the wait
+        parts = [f"stt {self._stt_secs:.1f} s"]
+        if t_llm_start is not None and first_token is not None:
+            parts.append(f"llm first token {first_token - t_llm_start:.1f} s")
+        if first_audio is not None:
+            parts.append(f"first audio {first_audio - t_heard:.1f} s")
+        parts.append(f"total {now - t_heard:.1f} s")
+        log.info("latency: %s", ", ".join(parts))
+
     async def run_turn(self, req: Request) -> None:
         async with self.turn_lock:
             try:
+                self._stt_secs = 0.0
+                self._first_audio = None
                 text = req.text
                 if req.kind == "activate":
                     if not self.voice:
@@ -180,12 +233,22 @@ class Assistant:
                         return
                 if not text:
                     return
+                t_heard = time.perf_counter()
                 self.bus.emit_nowait("transcript", text=text, final=True)
                 self.bus.emit_nowait("state", state="thinking")
-                reply = await self.agent.handle(text)
+                fp = fastpath.match(text) if self.cfg.agent.fast_paths else None
+                if fp is not None:
+                    log.info("fast path: %s", fp.kind)
+                    await self.run_fast(fp, text)
+                    self._log_latency(t_heard, None, None, self._first_audio)
+                    return
+                self.bus.emit_nowait("state", state="speaking")  # sentences stream out as they finish
+                reply = await self.agent.handle(text, speaker=self.speaker)
                 log.info("reply: '%s'", reply)
-                self.bus.emit_nowait("state", state="speaking")
-                await self.speaker.speak(reply)
+                if not self.agent.streamed:
+                    await self.speaker.speak(reply)
+                self._log_latency(t_heard, self.agent.timing.get("start"), self.agent.timing.get("first_token"),
+                                  self.agent.first_audio_at)
             except Exception:  # noqa: BLE001
                 log.exception("turn failed")
                 await self.say_safe(APOLOGY)

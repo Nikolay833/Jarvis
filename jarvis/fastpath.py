@@ -1,0 +1,101 @@
+"""Fast paths: answer trivial, unambiguous requests without the LLM.
+
+Pure matching only (no I/O). Every pattern is anchored on the whole normalized utterance, so
+anything with extra words ("what time is it in Tokyo", "open chrome and search cats") returns
+None and goes to the agent.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from datetime import datetime
+
+from .tools.apps import APP_MAP, SPECIAL
+
+
+@dataclass(frozen=True)
+class FastPath:
+    kind: str                       # time | date | day | open_app | lock | stop | volume
+    reply: str                      # spoken reply ("" = say nothing)
+    action: tuple[str, ...] = ()    # for the caller to run: ("open_app", name) | ("lock_pc",) | ("volume", up|down|mute)
+    stop_speaking: bool = False
+
+
+_LEAD = re.compile(r"^(?:(?:hey|ok|okay)\s+)?jarvis\b\s*")
+_TRAIL = re.compile(r"\s*\b(?:please|sir|jarvis|thanks|thank you)$")
+_POLITE = r"(?:(?:can|could|would|will) you\s+)?(?:please\s+)?"
+
+
+def normalize(text: str) -> str:
+    """Lowercase, drop punctuation (keep apostrophes), collapse spaces, strip jarvis/please."""
+    t = text.lower().replace("’", "'")
+    t = re.sub(r"[^a-z0-9' ]+", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    t = _LEAD.sub("", t)
+    for _ in range(3):  # "... please sir"
+        t2 = _TRAIL.sub("", t).strip()
+        if t2 == t:
+            break
+        t = t2
+    return t
+
+
+def _re(pattern: str) -> re.Pattern[str]:
+    return re.compile(rf"^(?:{pattern})$")
+
+
+_NOW = r"(?: (?:right )?now)?"
+_TIME = _re(_POLITE + r"(?:tell me |give me )?(?:what(?:'s| is|s) )?the (?:current )?time" + _NOW
+            + r"|" + _POLITE + r"what time is it" + _NOW
+            + r"|current time")
+_DAY = _re(_POLITE + r"(?:what day is it(?: today)?|what(?:'s| is|s) the day(?: today)?|what(?:'s| is|s) today|"
+           r"what day of the week is it(?: today)?)")
+_DATE = _re(_POLITE + r"(?:what(?:'s| is|s) (?:the |today's |todays )(?:date|current date)(?: today)?|"
+            r"what is today's date|what(?:'s| is|s) the date|tell me the date|what date is it(?: today)?)")
+_OPEN = _re(_POLITE + r"(?:open|launch)(?: up)? (?:the )?(.+?)(?: app| application)?")
+_LOCK = _re(_POLITE + r"lock (?:the |my )?(?:pc|computer)")
+_STOP = _re(r"(?:stop(?: talking| speaking)?|never ?mind|cancel(?: that)?|forget it|be quiet)")
+_VOL_UP = _re(_POLITE + r"(?:turn |put |bring )?(?:the )?(?:volume|sound) up|" + _POLITE + r"(?:raise|increase) the volume")
+_VOL_DOWN = _re(_POLITE + r"(?:turn |put |bring )?(?:the )?(?:volume|sound) down|"
+                + _POLITE + r"(?:lower|reduce|decrease) the volume")
+_VOL_MUTE = _re(_POLITE + r"(?:un ?mute|mute)(?: the)?(?: (?:volume|sound|pc|computer))?|(?:volume|sound) mute")
+
+
+def format_time(now: datetime) -> str:
+    return now.strftime("%I:%M %p").lstrip("0")
+
+
+def format_date(now: datetime) -> str:
+    return f"{now.strftime('%A')}, {now.day} {now.strftime('%B %Y')}"
+
+
+def match(text: str, now: datetime | None = None) -> FastPath | None:
+    """Return a FastPath if the whole utterance is a known trivial command, else None."""
+    t = normalize(text)
+    if not t:
+        return None
+    now = now or datetime.now()
+    if _STOP.match(t):
+        return FastPath("stop", "", stop_speaking=True)
+    if _TIME.match(t):
+        return FastPath("time", f"It's {format_time(now)}, sir.")
+    if _DAY.match(t):
+        return FastPath("day", f"It's {now.strftime('%A')}, sir.")
+    if _DATE.match(t):
+        return FastPath("date", f"Today is {format_date(now)}, sir.")
+    if _LOCK.match(t):
+        return FastPath("lock", "Locking the PC, sir.", ("lock_pc",))
+    m = _OPEN.match(t)
+    if m:
+        name = m.group(1).strip()
+        if name in APP_MAP or name in SPECIAL:
+            return FastPath("open_app", f"Opening {name.title()}, sir.", ("open_app", name))
+        return None
+    if _VOL_UP.match(t):
+        return FastPath("volume", "Volume up, sir.", ("volume", "up"))
+    if _VOL_DOWN.match(t):
+        return FastPath("volume", "Volume down, sir.", ("volume", "down"))
+    if _VOL_MUTE.match(t):
+        return FastPath("volume", "Toggling mute, sir.", ("volume", "mute"))
+    return None

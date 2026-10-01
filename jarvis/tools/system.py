@@ -116,3 +116,17 @@ def lock_pc() -> str:
         raise ToolError("locking is only supported on Windows")
     ctypes.windll.user32.LockWorkStation()  # type: ignore[attr-defined]
     return "PC locked"
+
+
+_VK_VOLUME = {"mute": 0xAD, "down": 0xAE, "up": 0xAF}
+
+
+def press_volume_key(direction: str, steps: int = 5) -> None:
+    """Press the media volume key (each step is about 2 percent). Windows only; not a model tool."""
+    if not IS_WINDOWS:
+        raise ToolError("volume keys are only supported on Windows")
+    vk = _VK_VOLUME[direction]
+    n = 1 if direction == "mute" else steps
+    for _ in range(n):
+        ctypes.windll.user32.keybd_event(vk, 0, 0, 0)  # type: ignore[attr-defined]
+        ctypes.windll.user32.keybd_event(vk, 0, 2, 0)  # type: ignore[attr-defined]
