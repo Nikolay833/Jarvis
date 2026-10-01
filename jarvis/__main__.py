@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import os
 import asyncio
 import json
 import logging
 import logging.handlers
 import sys
 import threading
+import warnings
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -429,6 +431,14 @@ def main(argv: list[str] | None = None) -> None:
 
         print(list_devices())
         return
+    if not args.verbose:
+        # Library chatter that is harmless on Windows (no symlink support, deprecations).
+        os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+        os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+        warnings.filterwarnings("ignore", category=FutureWarning)
+        warnings.filterwarnings("ignore", category=UserWarning, module=r"(torch|huggingface_hub)\.")
+        for noisy in ("httpx", "huggingface_hub", "phonemizer"):
+            logging.getLogger(noisy).setLevel(logging.ERROR)
     setup_logging(args.verbose)
     cfg = load_config(args.config)
     voice = not (args.text or args.no_voice)

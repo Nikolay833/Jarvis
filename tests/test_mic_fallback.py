@@ -38,6 +38,7 @@ def test_falls_back_to_same_mic_on_other_api_and_native_rate(monkeypatch):
     import sys
 
     fake = FakeSD({(2, 48000.0)})
+    monkeypatch.setattr("jarvis.audio.mic.time.sleep", lambda s: None)
     monkeypatch.setitem(sys.modules, "sounddevice", fake)
     mic = MicStream()
     mic.start()
@@ -50,6 +51,7 @@ def test_raises_clear_error_when_nothing_opens(monkeypatch):
 
     import pytest
 
+    monkeypatch.setattr("jarvis.audio.mic.time.sleep", lambda s: None)
     monkeypatch.setitem(sys.modules, "sounddevice", FakeSD(set()))
     with pytest.raises(RuntimeError, match="could not open any microphone"):
         MicStream().start()
@@ -64,3 +66,23 @@ def test_resample_48k_to_16k_is_continuous():
     assert abs(len(out) - 16000) <= 2
     ref = 8000 * np.sin(2 * np.pi * 440 * np.arange(len(out)) / 16000)
     assert np.max(np.abs(out.astype(np.float64) - ref)) < 400
+
+
+def test_never_picks_loopback_or_wdm_ks(monkeypatch):
+    import sys
+
+    import pytest
+
+    fake = FakeSD({(3, 44100.0), (3, 16000.0)})  # only Stereo Mix would open
+    monkeypatch.setattr("jarvis.audio.mic.time.sleep", lambda s: None)
+    monkeypatch.setitem(sys.modules, "sounddevice", fake)
+    with pytest.raises(RuntimeError):
+        MicStream().start()
+    assert fake.opened == []
+
+
+def test_resample_float_length():
+    from jarvis.audio.mic import resample_float
+
+    out = resample_float(np.zeros(24000, dtype=np.float32), 24000, 48000)
+    assert len(out) == 48000 and out.dtype == np.float32

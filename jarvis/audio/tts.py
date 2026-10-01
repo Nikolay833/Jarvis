@@ -232,7 +232,10 @@ class KokoroSpeaker:
         t = threading.Thread(target=producer, daemon=True)
         t.start()
         try:
-            with sd.OutputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32", device=self.device) as out:
+            from .mic import open_output, resample_float
+
+            out, out_rate = open_output(sd, self.device, SAMPLE_RATE)
+            with out:
                 while not self._stop.is_set():
                     try:
                         item = q.get(timeout=0.1)
@@ -241,6 +244,7 @@ class KokoroSpeaker:
                     if item is None:
                         break
                     sentence, audio = item
+                    audio = resample_float(audio, SAMPLE_RATE, out_rate)
                     if first_audio:
                         first_audio = False
                         now = time.perf_counter()
