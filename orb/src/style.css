@@ -1,11 +1,11 @@
 :root {
-  /* One accent: desaturated ice cyan. One neutral: cold off-white. */
-  --accent: #6fcfe3;
-  --accent-deep: #0e4a5c;
-  --ink: #e4f3f7;
-  --ink-dim: #a9c3cb;
-  --on-accent: #06222b; /* 11:1 on --accent */
-  --scrim: rgb(6 18 24 / 0.72);
+  /* One accent: electric cyan-blue (orb core #2a7bff, highlights #5fd4ff). */
+  --accent: #5fd4ff;
+  --accent-deep: #0a3a8a;
+  --ink: #e6f1ff;
+  --ink-dim: #9db8d9;
+  --on-accent: #041a2e; /* 11:1 on --accent */
+  --scrim: rgb(4 10 24 / 0.72);
   --radius: 999px; /* shape lock: every interactive surface is a pill */
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -38,10 +38,10 @@ body {
 }
 
 #orb {
-  width: 260px;
-  height: 260px;
-  /* orb body is ~150px; the rest of the canvas is glow */
-  margin: -50px 0;
+  width: 320px;
+  height: 320px;
+  /* sphere is ~160-200px; the rest of the canvas is glow */
+  margin: -52px 0;
   flex: none;
 }
 
@@ -107,12 +107,12 @@ button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
   background: var(--accent);
   border: 1px solid var(--accent);
 }
-#approve:hover { background: #8adaea; }
+#approve:hover { background: #8fe0ff; }
 
 #deny {
   color: var(--ink);
   background: var(--scrim);
-  border: 1px solid rgb(228 243 247 / 0.45);
+  border: 1px solid rgb(230 241 255 / 0.45);
 }
 #deny:hover { border-color: var(--ink); }
 
