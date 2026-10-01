@@ -53,6 +53,16 @@ restart Ollama (quit it from the tray and reopen) for them to apply. Tunables ar
 - Claude chat: "ask Claude why the sky is blue", "new Claude chat about dinner", "what were my Claude chats".
   Uses your Claude subscription through the `claude` CLI in an empty folder, without file or shell tools.
   Coding in a project folder is still "Claude Code" (`claude_code_run`).
+- Claude Code sessions (projects can be anywhere; Jarvis learns them from Claude's own history plus your Desktop and
+  Documents folders): "open the login bug session in Jarvis", "continue where I left off in Jarvis", "new Claude
+  session for the Jarvis project: fix the flaky test", "list my Claude sessions", "what is Claude doing?",
+  "is Claude done?", "ask that session whether the tests pass and tell me". If several sessions match, Jarvis reads
+  the top three and you answer "two".
+- Claude announcements: Jarvis says "Sir, Claude finished in <project>: ..." or "Sir, Claude needs your permission
+  in <project>." Install the hooks once (`setup_windows.ps1` does it):
+  `.venv\Scripts\python scripts\install_claude_hooks.py` and remove them with `... --uninstall`. They edit
+  `~/.claude/settings.json` (a timestamped backup is written first) and only send events to the local Jarvis.
+  Tune in `[claude_watch]` in `config.toml` (`min_turn_seconds` skips short turns).
 
 ## Safety
 

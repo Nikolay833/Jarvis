@@ -33,16 +33,18 @@ If a request is ambiguous and a wrong guess could do harm, ask one short questio
 Risky tools (deleting, installing, stopping things, running Claude Code) ask the user for approval automatically; just call the tool.
 For coding work in a project folder, use claude_code_run. For simple PC questions, use system_info or run_powershell.
 When the user asks you to do something on the PC, call the tool in this same response; never say you will do it later. Only reply in text after the tool results arrive, reporting what actually happened.
-To check what Claude Code said or did last, use claude_code_history. To make folders or files, use create_folder and write_file.
+To read out the last messages of a Claude conversation word for word, use claude_code_history. To make folders or files, use create_folder and write_file.
 For music use music_control (pause, resume, next, previous, stop), spotify_now_playing and spotify_play; for windows use window_action (minimize, maximize, restore, focus, close) and minimize_all; for Chrome profiles or searching in Chrome use open_chrome (chrome_profiles lists profiles).
-For "ask Claude", "tell Claude" or "have Claude do" something, use claude_terminal: it opens a visible terminal running Claude with the request (pass the project folder if one is named; mode "continue" if the user wants the same conversation). Then say in one short sentence that Claude is on it. Only if the user explicitly wants you to read Claude's answer back, use claude_chat instead and relay the answer faithfully; claude_chat_list and claude_chat_history manage those chats. claude_code_run is for silent background coding jobs.
+Claude Code sessions: to open or resume an existing session ("open the login bug session in Jarvis") use claude_open_session(topic, project); if it returns a question listing sessions, say it exactly as given, and after the user answers call it again with choice=N. "Continue where I left off in X" -> claude_continue. "New Claude session for X" or "ask Claude to do X in project Y" -> claude_new_session (the task goes in prompt). "What is Claude doing", "is Claude done", "did Claude finish" -> claude_status. "List my Claude sessions" -> claude_sessions. "Ask that session X and tell me the answer" -> claude_ask_session (only when the answer should be spoken; otherwise open the session). Confirm in one short sentence, e.g. "Opening the login bug session, sir."
+For a plain "ask Claude" or "tell Claude" request with no project or session, use claude_terminal (opens a visible terminal running Claude with the request), then say in one short sentence that Claude is on it. Only if the user explicitly wants you to read Claude's answer back, use claude_chat instead and relay the answer faithfully; claude_chat_list and claude_chat_history manage those chats. claude_code_run is for silent background coding jobs.
 After using tools, report the outcome in one short sentence. If a tool fails, say so plainly and suggest the next step."""
 
 NUDGE = "(system) You announced an action but did not call a tool. Call the appropriate tool now. Do not reply with text only."
 MAX_NUDGES = 2
 
 # Slow tools: say this short line before running, so the user is not left in silence.
-SLOW_TOOL_NOTICE = {"claude_chat": "Asking Claude, sir.", "claude_chat_new": "Asking Claude, sir."}
+SLOW_TOOL_NOTICE = {"claude_chat": "Asking Claude, sir.", "claude_chat_new": "Asking Claude, sir.",
+                    "claude_ask_session": "Asking that session, sir."}
 
 _LEAD = r"(?:(?:very well|certainly|of course|right|sure|ok(?:ay)?|alright|understood|absolutely|splendid)[,.!]?\s+)?(?:sir[,.!]?\s+)?"
 _ANNOUNCE = re.compile(

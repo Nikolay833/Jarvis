@@ -86,6 +86,14 @@ class ClaudeCodeConfig:
 
 
 @dataclass
+class ClaudeWatchConfig:
+    enabled: bool = True  # react to events sent by the Claude Code hooks (scripts/install_claude_hooks.py)
+    announce_finish: bool = True  # "Sir, Claude finished in <project>: ..."
+    announce_permission: bool = True  # "Sir, Claude needs your permission in <project>."
+    min_turn_seconds: float = 20.0  # announce "finished" only if the turn took at least this long
+
+
+@dataclass
 class SpotifyConfig:
     client_id: str = ""      # optional Spotify developer app (free) for song search
     client_secret: str = ""
@@ -107,6 +115,7 @@ class Config:
     safety: SafetyConfig = field(default_factory=SafetyConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     claude_code: ClaudeCodeConfig = field(default_factory=ClaudeCodeConfig)
+    claude_watch: ClaudeWatchConfig = field(default_factory=ClaudeWatchConfig)
     spotify: SpotifyConfig = field(default_factory=SpotifyConfig)
     files: FilesConfig = field(default_factory=FilesConfig)
     source: str = "defaults"

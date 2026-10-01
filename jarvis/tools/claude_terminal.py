@@ -8,6 +8,7 @@ and newlines in the request survive (no command-line quoting through cmd or wt).
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -33,13 +34,29 @@ def claude_invocation(binary: str) -> str:
     return "& " + _ps_quote(binary)
 
 
-def build_script(invocation: str, folder: str, prompt_file: str | None, mode: str, session: str) -> str:
-    """PowerShell script text that starts Claude in `folder` with the prompt from `prompt_file`."""
-    flags = ""
+_PLAIN_ARG = re.compile(r"^--?[A-Za-z][\w-]*$")
+
+
+def _ps_arg(arg: str) -> str:
+    """Flags like --resume stay bare; values (ids, names with spaces) are single-quoted."""
+    return arg if _PLAIN_ARG.match(arg) else _ps_quote(arg)
+
+
+def build_args(mode: str = "new", session: str = "", name: str = "") -> list[str]:
+    """Claude CLI arguments for a session: --continue, --resume <id> and/or --name <name>."""
+    args: list[str] = []
     if mode == "continue":
-        flags = " --continue"
+        args.append("--continue")
     elif mode == "resume" and session:
-        flags = " --resume " + _ps_quote(session)
+        args += ["--resume", session]
+    if name.strip():
+        args += ["--name", name.strip()]
+    return args
+
+
+def build_script(invocation: str, folder: str, prompt_file: str | None, args: list[str] | None = None) -> str:
+    """PowerShell script text that starts Claude (with `args`) in `folder`, prompt read from `prompt_file`."""
+    flags = "".join(" " + _ps_arg(a) for a in (args or []))
     lines = [
         "$Host.UI.RawUI.WindowTitle = 'Claude (Jarvis)'",
         "Set-Location -LiteralPath " + _ps_quote(folder),
@@ -61,9 +78,42 @@ def launch_command(script: str, folder: str) -> list[str]:
     return ps
 
 
-@tool("Open a visible terminal window running Claude (Claude Code) and give it the user's request, so Claude "
-      "does the work on screen while the user watches. Use this when the user asks you to ask Claude, tell "
-      "Claude, or have Claude do something. Jarvis does not hear Claude's answer.")
+def prepare_launch(binary: str, where: Path, prompt: str, args: list[str], tmp: Path) -> tuple[list[str], bool]:
+    """Write the prompt file and start script under `tmp`. Returns (command line, uses_windows_terminal)."""
+    tmp.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    prompt_file = None
+    if prompt.strip():
+        prompt_file = tmp / f"prompt-{stamp}.txt"
+        prompt_file.write_text(prompt.strip(), encoding="utf-8")
+    script = tmp / f"start-{stamp}.ps1"
+    # BOM so Windows PowerShell 5 reads non-ASCII paths in the script correctly.
+    script.write_text(build_script(claude_invocation(binary), str(where),
+                                   str(prompt_file) if prompt_file else None, args), encoding="utf-8-sig")
+    cmd = launch_command(str(script), str(where))
+    return cmd, os.path.basename(cmd[0]).lower().startswith("wt")
+
+
+def open_claude_terminal(folder: str, prompt: str = "", args: list[str] | None = None) -> Path:
+    """Open a visible terminal running interactive Claude in `folder` with CLI `args` (--resume <id>,
+    --continue, --name <name>) and the prompt. Returns the folder used. Windows only."""
+    if not IS_WINDOWS:
+        raise ToolError("opening a Claude terminal is only supported on Windows")
+    binary = resolve_binary(ctx.config.claude_code.binary)
+    where = resolve_path(folder) if folder.strip() else Path.home()
+    if not Path(where).is_dir():
+        raise ToolError(f"folder not found: {where}")
+    cmd, is_wt = prepare_launch(binary, Path(where), prompt, list(args or []),
+                                Path(tempfile.gettempdir()) / "jarvis-claude")
+    flags = 0 if is_wt else subprocess.CREATE_NEW_CONSOLE  # type: ignore[attr-defined]
+    subprocess.Popen(cmd, cwd=str(where), creationflags=flags)
+    return Path(where)
+
+
+@tool("Open a visible terminal window running Claude (Claude Code) and give it a simple request, so Claude does "
+      "the work on screen while the user watches. For a plain 'ask Claude X' with no named project or session. "
+      "For existing or named sessions and projects use claude_open_session, claude_continue or "
+      "claude_new_session instead. Jarvis does not hear Claude's answer.")
 def claude_terminal(prompt: str = "", folder: str = "", mode: str = "new", session: str = "") -> str:
     """Start interactive Claude in a terminal.
 
@@ -73,29 +123,9 @@ def claude_terminal(prompt: str = "", folder: str = "", mode: str = "new", sessi
         mode: "new" for a fresh conversation, "continue" to continue the most recent conversation in that folder, or "resume" with a session id.
         session: Claude session id, only with mode "resume".
     """
-    if not IS_WINDOWS:
-        raise ToolError("opening a Claude terminal is only supported on Windows")
-    binary = resolve_binary(ctx.config.claude_code.binary)
-    where = resolve_path(folder) if folder.strip() else Path.home()
-    if not Path(where).is_dir():
-        raise ToolError(f"folder not found: {where}")
     mode = (mode or "new").strip().lower()
     if mode not in ("new", "continue", "resume"):
         mode = "new"
-    tmp = Path(tempfile.gettempdir()) / "jarvis-claude"
-    tmp.mkdir(exist_ok=True)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    prompt_file = None
-    if prompt.strip():
-        prompt_file = tmp / f"prompt-{stamp}.txt"
-        prompt_file.write_text(prompt.strip(), encoding="utf-8")
-    script = tmp / f"start-{stamp}.ps1"
-    # BOM so Windows PowerShell 5 reads non-ASCII paths in the script correctly.
-    script.write_text(build_script(claude_invocation(binary), str(where),
-                                   str(prompt_file) if prompt_file else None, mode, session),
-                      encoding="utf-8-sig")
-    cmd = launch_command(str(script), str(where))
-    flags = 0 if os.path.basename(cmd[0]).lower().startswith("wt") else subprocess.CREATE_NEW_CONSOLE  # type: ignore[attr-defined]
-    subprocess.Popen(cmd, cwd=str(where), creationflags=flags)
+    where = open_claude_terminal(folder, prompt, build_args(mode, session))
     what = {"new": "a new", "continue": "the last", "resume": "that"}[mode]
-    return f"Opened Claude in a terminal ({what} conversation) in {where}" + (" with your request." if prompt_file else ".")
+    return f"Opened Claude in a terminal ({what} conversation) in {where}" + (" with your request." if prompt.strip() else ".")

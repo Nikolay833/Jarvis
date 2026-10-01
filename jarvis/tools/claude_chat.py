@@ -17,7 +17,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .claude_code import resolve_binary
+from .claude_code import headless_env, resolve_binary
 from .context import NO_WINDOW, ctx
 from .registry import ToolError, tool
 
@@ -145,7 +145,7 @@ async def run_cli(cmd: list[str], cwd: str, message: str, timeout: float = TIMEO
     """Run the CLI without blocking the loop. Replaced in tests."""
     proc = await asyncio.create_subprocess_exec(
         *cmd, cwd=cwd, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE, creationflags=NO_WINDOW)
+        stderr=asyncio.subprocess.PIPE, creationflags=NO_WINDOW, env=headless_env())
     try:
         out, err = await asyncio.wait_for(proc.communicate(message.encode("utf-8")), timeout)
     except asyncio.TimeoutError:

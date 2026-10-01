@@ -120,6 +120,11 @@ def build_command(binary: str, prompt: str, permission_mode: str) -> list[str]:
             "--permission-mode", permission_mode]
 
 
+def headless_env() -> dict[str, str]:
+    """Environment for Claude runs started by Jarvis: the Claude hooks (jarvis.claude_hook) skip these."""
+    return {**os.environ, "JARVIS_HEADLESS": "1"}
+
+
 def resolve_binary(configured: str) -> str:
     """Path of the claude executable (PATH lookup finds the Windows claude.cmd shim), or ToolError."""
     binary = shutil.which(configured) or (configured if os.path.isfile(configured) else None)
@@ -150,6 +155,7 @@ class JobManager:
             stderr=asyncio.subprocess.PIPE,
             limit=STDOUT_LIMIT,
             creationflags=NO_WINDOW,
+            env=headless_env(),
         )
         job = Job(id=uuid.uuid4().hex[:6], folder=os.path.abspath(folder), prompt=prompt, proc=proc)
         self.jobs[job.id] = job

@@ -49,6 +49,10 @@ if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
     Write-Warning "Claude Code CLI not found on PATH (only needed for the Claude Code tools). Set claude_code.binary in config.toml."
 }
 
+Write-Host "==> Installing Claude Code hooks (Jarvis announces when Claude finishes or needs permission)"
+& $Py "scripts\install_claude_hooks.py"
+Write-Host "    Edits ~/.claude/settings.json (backup written first). Undo: $Py scripts\install_claude_hooks.py --uninstall"
+
 Write-Host ""
 Write-Host "Done. Next steps:"
 Write-Host "  1. Test without audio:   .venv\Scripts\python -m jarvis --text"

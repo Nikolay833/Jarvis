@@ -16,6 +16,7 @@ from typing import Any
 from . import fastpath
 from .agent import Agent, Confirmer
 from .bus import EventBus
+from .claude_watch import watch as claude_watch
 from .utterance import asks_question, fix_names, sounds_unfinished
 from .config import Config, load_config, repo_root
 from .llm import LLMError, OllamaClient
@@ -53,6 +54,8 @@ class Assistant:
         self.speaker: Any = None
         self.mic: Any = None
         self.llm_ok = False
+        self._announce_tasks: set[asyncio.Task] = set()
+        claude_watch.cfg = cfg.claude_watch
         self._stt_secs = 0.0
         self._first_audio: float | None = None
 
@@ -333,6 +336,19 @@ class Assistant:
             return
         self.requests.put_nowait(Request("text", text))
 
+    def on_claude_event(self, msg: dict[str, Any]) -> None:
+        """A Claude Code hook reported Stop / Notification: announce it (never blocks the bus loop)."""
+        try:
+            text = claude_watch.handle(msg)
+        except Exception:  # noqa: BLE001
+            log.exception("bad claude_event")
+            return
+        if text:
+            log.info("claude event %s: %s", msg.get("event"), text)
+            task = asyncio.ensure_future(self.announce(text))
+            self._announce_tasks.add(task)
+            task.add_done_callback(self._announce_tasks.discard)
+
     async def dispatch_bus(self) -> None:
         while True:
             msg = await self.bus.inbound.get()
@@ -341,6 +357,8 @@ class Assistant:
                 self.confirmer.resolve(str(msg.get("id", "")), bool(msg.get("approved")))
             elif kind == "text_input":
                 self.submit_text(str(msg.get("text", "")))
+            elif kind == "claude_event":
+                self.on_claude_event(msg)
             elif kind == "activate":
                 if self.turn_lock.locked():
                     self.speaker.stop()  # interrupt speech; ignore if mid-recording

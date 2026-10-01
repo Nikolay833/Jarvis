@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from ..claude_sessions import encode_project, projects_dir  # noqa: F401  (re-exported)
 from ..paths import resolve_path
 from .claude_code import _describe, jobs
 from .registry import ToolError, tool
@@ -17,16 +18,6 @@ MSG_CHARS = 400
 TOTAL_CHARS = 2500
 TAIL_BYTES = 2 * 1024 * 1024
 MAX_COUNT = 20
-
-
-def projects_dir() -> Path:
-    base = os.environ.get("CLAUDE_CONFIG_DIR")
-    return (Path(base) if base else Path.home() / ".claude") / "projects"
-
-
-def encode_project(path: str) -> str:
-    """Claude Code's folder naming: every non-alphanumeric character becomes '-'."""
-    return re.sub(r"[^A-Za-z0-9]", "-", path)
 
 
 def _newest(d: Path) -> float:
@@ -109,10 +100,10 @@ def _clip(text: str, n: int) -> str:
     return text if len(text) <= n else text[: n - 3] + "..."
 
 
-@tool("Show the latest messages of the most recent Claude Code conversation on this PC (optionally for one "
-      "project folder). Use it to check what Claude Code said or did last in coding work. For chats Jarvis had "
-      "with Claude (claude_chat), use claude_chat_history; if 'my last message with Claude' is unclear, "
-      "check both.")
+@tool("Read out the last few messages (the actual words) of the latest Claude Code conversation, optionally for "
+      "one project folder. Only when the user wants to hear what was said. For 'what is Claude doing' or 'is "
+      "Claude done' use claude_status; to list sessions use claude_sessions. For chats Jarvis had with Claude "
+      "(claude_chat), use claude_chat_history.")
 def claude_code_history(folder: str = "", count: int = 4) -> str:
     """Recent Claude Code conversation.
 
