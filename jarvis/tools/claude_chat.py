@@ -195,10 +195,10 @@ async def _ask(name: str, message: str) -> str:
 
 
 # ---- tools -----------------------------------------------------------------------
-@tool("Ask Claude a question or chat with Claude (general conversation, advice, explanations, web lookups). "
-      "NOT for coding in a project folder (use claude_code_run for that). Use for 'ask Claude ...', "
-      "'tell Claude ...', 'talk to Claude'. Continues the recent chat unless a session name is given. "
-      "Relay Claude's answer faithfully; shorten only if very long.")
+@tool("Ask Claude a question in the background and read the answer back to the user. Use ONLY when the "
+      "user wants the answer spoken back ('ask Claude and tell me', 'what does Claude say'). For plain "
+      "'ask Claude' / 'tell Claude' / 'have Claude do', use claude_terminal instead. Continues the recent "
+      "chat unless a session name is given. Relay Claude's answer faithfully; shorten only if very long.")
 async def claude_chat(message: str, session: str = "") -> str:
     """Chat with Claude.
 
