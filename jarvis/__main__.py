@@ -16,10 +16,14 @@ from typing import Any
 from . import fastpath
 from .agent import Agent, Confirmer
 from .bus import EventBus
+from .utterance import asks_question, sounds_unfinished
 from .config import Config, load_config, repo_root
 from .llm import LLMError, OllamaClient
 from .tools import load_all
 from .tools.context import set_context
+
+MAX_FOLLOW_UPS = 4  # back-and-forth answers in one turn without saying "Hey Jarvis" again
+FOLLOW_ON_TIMEOUT = 3.0  # seconds to wait for the rest of a cut-off sentence
 
 log = logging.getLogger("jarvis")
 
@@ -117,10 +121,16 @@ class Assistant:
         log.info("startup warm-up done in %.1f s", time.perf_counter() - t_all)
 
     async def record_text(self, cancel: threading.Event | None = None, flush: bool = False,
-                          before: Any = None) -> str:
-        audio = await asyncio.to_thread(
-            lambda: self.recorder.record_blocking(
-                lambda lvl: self.bus.emit_nowait("level", rms=lvl), cancel, flush, before))
+                          before: Any = None, no_speech: float | None = None) -> str:
+        saved = self.recorder.no_speech_timeout
+        if no_speech is not None:
+            self.recorder.no_speech_timeout = no_speech
+        try:
+            audio = await asyncio.to_thread(
+                lambda: self.recorder.record_blocking(
+                    lambda lvl: self.bus.emit_nowait("level", rms=lvl), cancel, flush, before))
+        finally:
+            self.recorder.no_speech_timeout = saved
         self.bus.emit_nowait("level", rms=0.0)
         if audio.size == 0:
             log.warning("no speech heard (recording ended: %s after %.1f s)",
@@ -252,29 +262,64 @@ class Assistant:
                     if not text:
                         await self.say_safe(SORRY)
                         return
+                    text = await self.finish_utterance(text)
                 if not text:
                     return
-                t_heard = time.perf_counter()
-                self.bus.emit_nowait("transcript", text=text, final=True)
-                self.bus.emit_nowait("state", state="thinking")
-                fp = fastpath.match(text) if self.cfg.agent.fast_paths else None
-                if fp is not None:
-                    log.info("fast path: %s", fp.kind)
-                    await self.run_fast(fp, text)
-                    self._log_latency(t_heard, None, None, self._first_audio)
-                    return
-                self.bus.emit_nowait("state", state="speaking")  # sentences stream out as they finish
-                reply = await self.agent.handle(text, speaker=self.speaker)
-                log.info("reply: '%s'", reply)
-                if not self.agent.streamed:
-                    await self.speaker.speak(reply)
-                self._log_latency(t_heard, self.agent.timing.get("start"), self.agent.timing.get("first_token"),
-                                  self.agent.first_audio_at)
+                for _ in range(MAX_FOLLOW_UPS + 1):
+                    reply = await self.respond(text)
+                    # Jarvis asked something: keep listening for the answer without the wake word.
+                    if not (self.voice and self.cfg.audio.follow_up and reply and asks_question(reply)):
+                        break
+                    text = await self.listen_follow_up()
+                    if not text:
+                        break
             except Exception:  # noqa: BLE001
                 log.exception("turn failed")
                 await self.say_safe(APOLOGY)
             finally:
                 self.bus.emit_nowait("state", state="idle")
+
+    async def finish_utterance(self, text: str) -> str:
+        """If the user stopped mid-sentence ("open chrome with ..."), keep listening and append."""
+        for _ in range(2):
+            if not sounds_unfinished(text):
+                break
+            log.info("sounds unfinished, listening for the rest: '%s'", text)
+            more = await self.record_text(no_speech=FOLLOW_ON_TIMEOUT)
+            if not more:
+                break
+            text = f"{text} {more}"
+        return text
+
+    async def listen_follow_up(self) -> str:
+        """Listen once (no wake word) after Jarvis asked a question. Silence means the user is done."""
+        self.bus.emit_nowait("state", state="listening")
+        text = await self.record_text(flush=True, before=self._chime if self.cfg.audio.chime else None,
+                                      no_speech=self.cfg.audio.follow_up_seconds)
+        if text:
+            text = await self.finish_utterance(text)
+            log.info("follow-up: '%s'", text)
+        return text
+
+    async def respond(self, text: str) -> str:
+        """Answer one user utterance (fast path or agent). Returns what Jarvis said ('' if unknown)."""
+        t_heard = time.perf_counter()
+        self.bus.emit_nowait("transcript", text=text, final=True)
+        self.bus.emit_nowait("state", state="thinking")
+        fp = fastpath.match(text) if self.cfg.agent.fast_paths else None
+        if fp is not None:
+            log.info("fast path: %s", fp.kind)
+            await self.run_fast(fp, text)
+            self._log_latency(t_heard, None, None, self._first_audio)
+            return ""
+        self.bus.emit_nowait("state", state="speaking")  # sentences stream out as they finish
+        reply = await self.agent.handle(text, speaker=self.speaker)
+        log.info("reply: '%s'", reply)
+        if not self.agent.streamed:
+            await self.speaker.speak(reply)
+        self._log_latency(t_heard, self.agent.timing.get("start"), self.agent.timing.get("first_token"),
+                          self.agent.first_audio_at)
+        return reply
 
     def submit_text(self, text: str) -> None:
         """Typed or bus text: answers a pending confirmation, else becomes a request."""

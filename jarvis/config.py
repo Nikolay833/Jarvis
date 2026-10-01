@@ -46,11 +46,13 @@ class WakeWordConfig:
 class AudioConfig:
     input_device: str = ""
     output_device: str = ""
-    silence_seconds: float = 0.7
+    silence_seconds: float = 1.2
     max_record_seconds: float = 20.0
     no_speech_timeout: float = 6.0
     announce_ready: bool = True  # say "Online, sir." after startup
     chime: bool = True  # soft chime when listening starts
+    follow_up: bool = True  # after Jarvis asks a question, listen for the answer without the wake word
+    follow_up_seconds: float = 6.0  # how long to wait for that answer
 
 
 @dataclass
