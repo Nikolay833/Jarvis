@@ -2,7 +2,7 @@ import type { OrbState } from "./protocol";
 
 // Look: one dense, grainy sphere of cyan light particles. Density is modulated
 // by 3D noise so the surface shows dark gaps and bright clusters.
-const HALO = "63, 216, 245";
+const HALO = "30, 70, 200";
 
 const SIZE = 260; // css px, canvas is square
 const R0 = 60; // resting sphere radius in css px (loud: wobbles out to ~78)
@@ -127,10 +127,10 @@ vec3 view(vec3 v){
   return vec3(v.x, ct*v.y - st*v.z, st*v.y + ct*v.z);
 }
 
-const vec3 TEAL = vec3(0.14, 0.62, 0.74);
-const vec3 CYAN = vec3(0.18, 0.84, 0.96);   // ~#2fd6f5
-const vec3 ICE  = vec3(0.48, 0.91, 1.0);    // ~#7ae8ff
-const vec3 SPEC = vec3(0.78, 0.97, 1.0);
+const vec3 TEAL = vec3(0.04, 0.12, 0.42);   // deep navy
+const vec3 CYAN = vec3(0.10, 0.30, 0.85);   // ~#1a4dd9
+const vec3 ICE  = vec3(0.28, 0.52, 1.0);    // ~#4785ff
+const vec3 SPEC = vec3(0.60, 0.75, 1.0);
 const float CAM = 3.4;
 
 void main(){
@@ -183,7 +183,7 @@ void main(){
   float d = length(q) * 2.0;
   float s = (1.0 - smoothstep(0.35, 1.0, d));
   vec3 c = vCol * (s * vA);
-  c = 1.0 - exp(-c * 1.7);   // soft tone curve: dense clusters stay cyan instead of clipping white
+  c = 1.0 - exp(-c * 1.4);   // soft tone curve: dense clusters stay blue instead of clipping white
   // Premultiplied output: alpha must be >= every channel so additive blending
   // on a transparent window never turns grey at the edges.
   gl_FragColor = vec4(c, max(c.r, max(c.g, c.b)));
@@ -341,7 +341,7 @@ class Canvas2DRenderer implements Renderer {
       if (rl < 0.85) a *= 0.55;
       a += f.think * 0.55 * Math.exp(-(((SIZE / 2 - py) / f.radius + 0.45 * ((px - SIZE / 2) / f.radius) - bp) ** 2) * 9);
       const s = (1.7 + 1.6 * r3 * r3) * persp;
-      ctx.fillStyle = rnd > 0.965 ? `rgba(199,247,255,${clamp(a * A)})` : `rgba(${r3 > 0.6 ? "122,232,255" : "47,214,245"},${clamp(a * A * 0.9)})`;
+      ctx.fillStyle = rnd > 0.965 ? `rgba(153,191,255,${clamp(a * A)})` : `rgba(${r3 > 0.6 ? "71,133,255" : "26,77,217"},${clamp(a * A * 0.9)})`;
       ctx.fillRect(px - s / 2, py - s / 2, s, s);
     }
     ctx.globalCompositeOperation = "source-over";
