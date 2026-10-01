@@ -120,6 +120,14 @@ def build_command(binary: str, prompt: str, permission_mode: str) -> list[str]:
             "--permission-mode", permission_mode]
 
 
+def resolve_binary(configured: str) -> str:
+    """Path of the claude executable (PATH lookup finds the Windows claude.cmd shim), or ToolError."""
+    binary = shutil.which(configured) or (configured if os.path.isfile(configured) else None)
+    if not binary:
+        raise ToolError(f"Claude Code binary '{configured}' not found; set claude_code.binary in config.toml")
+    return binary
+
+
 class JobManager:
     def __init__(self) -> None:
         self.jobs: dict[str, Job] = {}
@@ -133,9 +141,7 @@ class JobManager:
         folder = os.path.expanduser(folder)
         if not os.path.isdir(folder):
             raise ToolError(f"folder does not exist: {folder}")
-        binary = shutil.which(cfg.binary) or (cfg.binary if os.path.isfile(cfg.binary) else None)
-        if not binary:
-            raise ToolError(f"Claude Code binary '{cfg.binary}' not found; set claude_code.binary in config.toml")
+        binary = resolve_binary(cfg.binary)
         proc = await asyncio.create_subprocess_exec(
             *build_command(binary, prompt, cfg.permission_mode),
             cwd=folder,

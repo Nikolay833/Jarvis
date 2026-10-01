@@ -52,6 +52,14 @@ stream_replies = true   # speak sentences while the LLM is still generating
 binary = "claude"        # name on PATH or full path to claude / claude.cmd
 permission_mode = "acceptEdits"
 
+[spotify]
+# Optional. Lets "play <song> on Spotify" find the exact track. Works on the FREE Spotify plan:
+# create a free developer app at https://developer.spotify.com/dashboard (any redirect URI, e.g.
+# http://127.0.0.1:8888/callback, no Premium needed; only song search is used) and paste its
+# Client ID and Client secret. Without them Jarvis opens a Spotify search instead.
+client_id = ""
+client_secret = ""
+
 [files]
 # Optional. If non-empty, file tools only work inside these folders.
 allowed_roots = []       # e.g. ["C:/Users/you/Documents", "D:/Projects"]

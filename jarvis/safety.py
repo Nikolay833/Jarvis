@@ -73,6 +73,8 @@ def classify_call(name: str, args: dict[str, Any], base_risk: str = SAFE) -> Ass
         return Assessment(RISKY, "tool is always risky")
     if name == "run_powershell":
         return classify_powershell(str(args.get("command", "")))
+    if name == "window_action" and str(args.get("action", "")).strip().lower() == "close":
+        return Assessment(RISKY, "closes windows")
     if name == "open_path":
         ext = os.path.splitext(str(args.get("path", "")))[1].lower()
         if ext in _EXECUTABLE_EXTS:
@@ -119,5 +121,10 @@ def describe_call(name: str, args: dict[str, Any]) -> str:
         parts = [p for p in re.split(r"[\\/]", raw) if p]
         folder = parts[-1] if parts else raw
         return f"start Claude Code in {_clip(folder, 60)} to: {_clip(args.get('prompt', ''), 100)}"
+    if name == "window_action" and str(args.get("action", "")).strip().lower() == "close":
+        app = _clip(args.get("app", ""), 40)
+        return f"close all {app} windows"
+    if name == "claude_chat_delete":
+        return f"delete the Claude chat {_clip(args.get('name', ''), 60)}"
     pretty = ", ".join(f"{k}={_clip(v, 40)}" for k, v in args.items())
     return f"call {name}({pretty})"

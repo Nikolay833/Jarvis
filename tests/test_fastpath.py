@@ -60,7 +60,7 @@ def test_volume():
     "open chrome and search for cats", "open the pod bay doors", "open my downloads folder",
     "open", "open chrome tabs", "start a timer for five minutes",
     "lock the door", "lock the pc in ten minutes", "unlock the pc",
-    "stop the music", "stop the timer", "cancel my subscription", "stop it from raining",
+    "stop the timer", "cancel my subscription", "stop it from raining",
     "what day is my birthday", "what is the date of the next holiday",
     "turn the volume up to eighty", "volume", "mute the microphone", "mute john",
     "can you help me with the time",

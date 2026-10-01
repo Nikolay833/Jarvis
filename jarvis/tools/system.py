@@ -121,6 +121,14 @@ def lock_pc() -> str:
 _VK_VOLUME = {"mute": 0xAD, "down": 0xAE, "up": 0xAF}
 
 
+def press_key(vk: int) -> None:
+    """Tap one virtual key (media keys etc.). Windows only; not a model tool."""
+    if not IS_WINDOWS:
+        raise ToolError("key presses are only supported on Windows")
+    ctypes.windll.user32.keybd_event(vk, 0, 0, 0)  # type: ignore[attr-defined]
+    ctypes.windll.user32.keybd_event(vk, 0, 2, 0)  # type: ignore[attr-defined]
+
+
 def press_volume_key(direction: str, steps: int = 5) -> None:
     """Press the media volume key (each step is about 2 percent). Windows only; not a model tool."""
     if not IS_WINDOWS:

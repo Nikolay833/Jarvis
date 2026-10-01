@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import logging.handlers
 import sys
@@ -175,6 +176,12 @@ class Assistant:
         if fp.stop_speaking:
             self.speaker.stop()
             return
+        if fp.speak_result:
+            reply = await self._fast_result(fp)
+            self.agent.add_exchange(text, reply)
+            self.bus.emit_nowait("state", state="speaking")
+            await self.speaker.speak(reply)
+            return
         self.agent.add_exchange(text, fp.reply)
         self.bus.emit_nowait("state", state="speaking")
         action = asyncio.create_task(self._fast_action(fp)) if fp.action else None
@@ -188,6 +195,17 @@ class Assistant:
             if err:
                 await self.say_safe(f"I am afraid that failed, sir. {err}")
 
+    async def _fast_result(self, fp: fastpath.FastPath) -> str:
+        """Run a tool fast path and turn its result into the spoken reply."""
+        try:
+            result = await self.agent.registry.call(fp.action[1], json.loads(fp.action[2]))
+        except Exception as exc:  # noqa: BLE001
+            log.exception("fast path action failed")
+            return f"I am afraid that failed, sir. {str(exc)[:120]}"
+        if result.startswith("Error:"):
+            return f"I am afraid that failed, sir. {result[6:].strip()[:160]}"
+        return result.rstrip(".") + ", sir."
+
     async def _fast_action(self, fp: fastpath.FastPath) -> str:
         """Run the side effect of a fast path. Returns an error text, or '' on success."""
         from .tools import system
@@ -197,6 +215,9 @@ class Assistant:
             if kind == "volume":
                 await asyncio.to_thread(system.press_volume_key, fp.action[1])
                 return ""
+            if kind == "call":
+                result = await self.agent.registry.call(fp.action[1], json.loads(fp.action[2]))
+                return result[7:127] if result.startswith("Error:") else ""
             args = {"name": fp.action[1]} if kind == "open_app" else {}
             result = await self.agent.registry.call(kind, args)
             return result[:120] if result.startswith("Error:") else ""

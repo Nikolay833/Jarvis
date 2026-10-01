@@ -21,6 +21,8 @@ dependencies = [
 [project.optional-dependencies]
 # Write config.toml from code (not needed to read it).
 config = ["tomli-w"]
+# Lets "play <song> on Spotify" press Play through UI Automation (optional; falls back to a key press).
+ui = ["pywinauto; sys_platform == 'win32'"]
 dev = ["pytest"]
 
 [project.scripts]

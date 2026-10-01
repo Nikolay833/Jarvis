@@ -46,11 +46,12 @@ jarvis/                 Python package (the core)
   bus.py                WebSocket event server
   audio/                wakeword.py, recorder.py, stt.py, tts.py
   llm.py                Ollama chat client with tool calling (non-streaming `chat`, streaming `chat_stream`)
-  fastpath.py           LLM-free answers for time/date/open app/lock/stop/volume (strict anchored regexes)
+  fastpath.py           LLM-free answers for time/date/open app/lock/stop/volume, minimise/maximise, music keys, "play X on spotify", "search for X" (strict anchored regexes; "close X" is never a fast path)
   agent.py              Conversation loop: messages, tool calls, confirmations
   safety.py             Risk classification of tool calls
   paths.py              Path resolution (~, env vars, Desktop/Documents/... incl. OneDrive-redirected)
-  tools/                Tool registry + tools (system, files, apps, claude_code, claude_history)
+  tools/                Tool registry + tools (system, files, apps, windows, chrome, spotify, claude_code,
+                        claude_history, claude_chat)
 tests/                  pytest, no hardware or network needed
 orb/                    Tauri v2 overlay app
 config.example.toml     Copy to config.toml
@@ -120,6 +121,35 @@ Claude Code transcripts in `~/.claude/projects` (safe).
 - Promise guard: a reply with no tool call that announces an action ("I'll check ...") gets a hidden
   `(system)` nudge and the loop continues (max 2 per turn). Nudge exchanges are dropped from history.
 - Each turn logs the tools it executed.
+
+## Windows, Chrome, Spotify, Claude chat tools
+
+- `tools/windows.py`: `list_windows`, `window_action(app, action)` (minimize|maximize|restore|focus|close),
+  `minimize_all` (Win+M). ctypes user32 only (EnumWindows, ShowWindow, SetForegroundWindow with the Alt-key
+  trick, PostMessage WM_CLOSE: graceful, never a kill). Skips invisible, cloaked, tool, shell and Jarvis's own
+  windows. `match_windows` is pure: tier 1 process name equals the apps.py alias exe, tier 2 exe name contains the
+  query, tier 3 title contains it. `close` is risky ("close all Chrome windows" confirmation); the rest are safe.
+- `tools/chrome.py`: `chrome_profiles` reads `%LOCALAPPDATA%\Google\Chrome\User Data\Local State`
+  (`profile.info_cache`); `open_chrome(profile, url, search)` fuzzy-matches profile by name, Google name, email or
+  folder, finds chrome.exe (registry App Paths, then Program Files) and runs it with `--profile-directory`.
+  Unknown profile: the error lists the profiles that exist.
+- `tools/spotify.py` (Spotify FREE, desktop app): `music_control` sends media keys (play/pause, next, previous,
+  stop), `spotify_now_playing` reads the Spotify window title ("Artist - Song"), `spotify_play(query)` opens
+  `spotify:track:<id>` (id from the Web API Client Credentials search when `[spotify]` client id/secret are set,
+  no Premium or user login needed) or `spotify:search:<query>`, focuses Spotify, tries to press Play through UI
+  Automation (optional `pywinauto`, extra `ui`) else one Enter key, then watches the title for ~4 s. Free plan
+  limit: Spotify offers no supported way to force playback of a chosen track, so this is best effort and the reply
+  says when "playback may need a click".
+- `tools/claude_chat.py`: normal chat with Claude via `claude -p --output-format json` (subscription, not coding).
+  Runs in the empty folder `%APPDATA%\Jarvis\claude-chat`, message on stdin, `--disallowedTools
+  Bash,Edit,Write,MultiEdit,NotebookEdit`, `--allowedTools WebSearch,WebFetch`, a short "voice assistant" appended
+  system prompt. Sessions in `%APPDATA%\Jarvis\claude_chats.json` (name -> session_id, created, last_used, cwd,
+  started); no name continues the chat used in the last 30 min, else starts a new one. New chat uses
+  `--session-id <uuid>`, later messages `--resume <id>`. Q/A is appended to `claude_chats/<name>.md`.
+  `claude_chat_new`, `claude_chat_list`, `claude_chat_history`, `claude_chat_delete` (risky). The agent speaks
+  "Asking Claude, sir." (`SLOW_TOOL_NOTICE`) and shows the thinking state while the tool runs.
+- Fast-path tool actions use `("call", tool, json_args)`; `speak_result` fast paths (what's playing, play X on
+  Spotify) speak the tool result instead of a canned reply.
 
 ## Safety model
 

@@ -34,10 +34,15 @@ Risky tools (deleting, installing, stopping things, running Claude Code) ask the
 For coding work in a project folder, use claude_code_run. For simple PC questions, use system_info or run_powershell.
 When the user asks you to do something on the PC, call the tool in this same response; never say you will do it later. Only reply in text after the tool results arrive, reporting what actually happened.
 To check what Claude Code said or did last, use claude_code_history. To make folders or files, use create_folder and write_file.
+For music use music_control (pause, resume, next, previous, stop), spotify_now_playing and spotify_play; for windows use window_action (minimize, maximize, restore, focus, close) and minimize_all; for Chrome profiles or searching in Chrome use open_chrome (chrome_profiles lists profiles).
+For "ask Claude", "tell Claude" or any general question for Claude, use claude_chat and relay its answer faithfully, shortening it only if very long; claude_chat_new, claude_chat_list and claude_chat_history manage those chats. claude_chat is conversation only; claude_code_run is for coding.
 After using tools, report the outcome in one short sentence. If a tool fails, say so plainly and suggest the next step."""
 
 NUDGE = "(system) You announced an action but did not call a tool. Call the appropriate tool now. Do not reply with text only."
 MAX_NUDGES = 2
+
+# Slow tools: say this short line before running, so the user is not left in silence.
+SLOW_TOOL_NOTICE = {"claude_chat": "Asking Claude, sir.", "claude_chat_new": "Asking Claude, sir."}
 
 _LEAD = r"(?:(?:very well|certainly|of course|right|sure|ok(?:ay)?|alright|understood|absolutely|splendid)[,.!]?\s+)?(?:sir[,.!]?\s+)?"
 _ANNOUNCE = re.compile(
@@ -346,7 +351,7 @@ class Agent:
                     await out.finish()  # free the speaker (a confirmation may need it)
                 for call in resp.tool_calls:
                     executed.append(call.name)
-                    result = await self._run_tool(call.name, call.arguments)
+                    result = await self._run_tool(call.name, call.arguments, out)
                     msgs.append({"role": "tool", "tool_name": call.name, "content": result})
             else:
                 reply = "My apologies, sir, that took more steps than I allow myself. Shall I carry on?"
@@ -375,7 +380,12 @@ class Agent:
         while msgs and msgs[-1].get("role") != "assistant":
             msgs.pop()
 
-    async def _run_tool(self, name: str, args: dict[str, Any]) -> str:
+    def _state(self, state: str) -> None:
+        emit = getattr(self.bus, "emit_nowait", None)
+        if emit is not None:
+            emit("state", state=state)
+
+    async def _run_tool(self, name: str, args: dict[str, Any], out: "_Out | None" = None) -> str:
         tool = self.registry.get(name)
         if tool is None:
             return f"Error: unknown tool '{name}'"
@@ -385,7 +395,13 @@ class Agent:
             if not await self.confirmer.ask(summary):
                 return "The user declined (or did not answer in time). The action was NOT performed."
         log.info("tool %s %s", name, json.dumps(args, default=str)[:200])
+        notice = SLOW_TOOL_NOTICE.get(name)
+        if notice and out is not None and (name != "claude_chat_new" or args.get("message")):
+            out.push(notice)  # spoken while the tool runs; the later reply reuses this stream
+            self._state("thinking")
         result = await self.registry.call(name, args)
+        if notice and out is not None:
+            self._state("speaking")
         if len(result) > MAX_TOOL_RESULT_CHARS:
             result = result[:MAX_TOOL_RESULT_CHARS] + "\n...[truncated]"
         return result

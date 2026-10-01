@@ -79,6 +79,12 @@ class ClaudeCodeConfig:
 
 
 @dataclass
+class SpotifyConfig:
+    client_id: str = ""      # optional Spotify developer app (free) for song search
+    client_secret: str = ""
+
+
+@dataclass
 class FilesConfig:
     allowed_roots: list[str] = field(default_factory=list)
 
@@ -94,6 +100,7 @@ class Config:
     safety: SafetyConfig = field(default_factory=SafetyConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     claude_code: ClaudeCodeConfig = field(default_factory=ClaudeCodeConfig)
+    spotify: SpotifyConfig = field(default_factory=SpotifyConfig)
     files: FilesConfig = field(default_factory=FilesConfig)
     source: str = "defaults"
 

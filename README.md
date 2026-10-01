@@ -38,6 +38,22 @@ restart Ollama (quit it from the tray and reopen) for them to apply. Tunables ar
 `config.example.toml` (`ollama.max_reply_tokens`, `ollama.keep_alive`, `audio.silence_seconds`,
 `agent.fast_paths`, `agent.stream_replies`).
 
+## More commands
+
+- Windows: "minimise Chrome", "maximise VS Code", "show the desktop", "focus Spotify", "close Notepad"
+  (closing asks for approval and is graceful).
+- Chrome: "search for best pizza", "google python tutorials", "open Chrome with my work profile" (profiles are
+  read from Chrome's Local State; matched by name, Google name, email or folder).
+- Music (Spotify desktop, free plan): "pause the music", "resume", "skip song", "previous song",
+  "what's playing", "play <song> on Spotify". Free Spotify cannot be forced to play a chosen track, so
+  "play <song>" is best effort: Jarvis opens the track, tries to press Play and tells you if it needs a click.
+  Optional, for exact song lookup: create a free app at https://developer.spotify.com/dashboard (any redirect
+  URI, no Premium) and put its client id and secret in the `[spotify]` section of `config.toml`.
+  Optional `pip install pywinauto` (`pip install -e .[ui]`) lets Jarvis press Play itself.
+- Claude chat: "ask Claude why the sky is blue", "new Claude chat about dinner", "what were my Claude chats".
+  Uses your Claude subscription through the `claude` CLI in an empty folder, without file or shell tools.
+  Coding in a project folder is still "Claude Code" (`claude_code_run`).
+
 ## Safety
 
 Reading, listing and opening things run at once. Deleting, moving, installing,

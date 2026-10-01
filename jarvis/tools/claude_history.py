@@ -110,7 +110,9 @@ def _clip(text: str, n: int) -> str:
 
 
 @tool("Show the latest messages of the most recent Claude Code conversation on this PC (optionally for one "
-      "project folder). Use it to check what Claude said or did last.")
+      "project folder). Use it to check what Claude Code said or did last in coding work. For chats Jarvis had "
+      "with Claude (claude_chat), use claude_chat_history; if 'my last message with Claude' is unclear, "
+      "check both.")
 def claude_code_history(folder: str = "", count: int = 4) -> str:
     """Recent Claude Code conversation.
 
