@@ -44,7 +44,7 @@ jarvis/                 Python package (the core)
   __main__.py           `python -m jarvis` entry point
   config.py             Loads config.toml (falls back to defaults)
   bus.py                WebSocket event server
-  audio/                wakeword.py, recorder.py, stt.py (whisper + parakeet engines), tts.py
+  audio/                wakeword.py, recorder.py, stt.py (whisper + parakeet engines), tts.py, bargein.py
   stt_bench.py          `python -m jarvis.stt_bench`: compare STT engines on your recordings
   llm.py                Ollama chat client with tool calling (non-streaming `chat`, streaming `chat_stream`)
   fastpath.py           LLM-free answers for time/date/open app/lock/stop/volume, minimise/maximise, music keys, "play X on spotify", "search for X" (strict anchored regexes; "close X" is never a fast path)
@@ -54,8 +54,15 @@ jarvis/                 Python package (the core)
   claude_sessions.py    Claude Code sessions from ~/.claude/projects transcripts (parse, project resolve, rank)
   claude_watch.py       Hook events -> spoken announcements (throttle, pending permission)
   claude_hook.py        Stdlib-only Claude Code hook: forwards Stop/Notification to the bus
+  store.py              %APPDATA%/Jarvis JSON files (atomic writes) and state.json
+  memory.py             Long-term facts about the user, dedupe, relevance, "[Known about the user: ...]" block
+  timeparse.py          Natural durations and times ("in 20 minutes", "tomorrow at 9")
+  reminders.py          Persistent reminders/timers + asyncio scheduler (missed ones announced at start)
+  briefing.py           Morning briefing (Open-Meteo weather, reminders, Claude sessions), first-wake-of-day logic
+  extras.py             Glue: memory block into the agent, scheduler start, automatic briefing hook
   tools/                Tool registry + tools (system, files, apps, windows, chrome, spotify, claude_code,
-                        claude_history, claude_chat, claude_sessions_tools, claude_terminal)
+                        claude_history, claude_chat, claude_sessions_tools, claude_terminal, memory_tools,
+                        reminder_tools, briefing_tool)
 scripts/                setup_windows.ps1, start_jarvis.ps1, install_claude_hooks.py
 tests/                  pytest, no hardware or network needed
 orb/                    Tauri v2 overlay app
@@ -98,6 +105,26 @@ Orb to core:
   startup, spoken apologies for empty transcripts ("Sorry sir, I didn't catch that.") and failed turns.
 - Startup warm-up in parallel: Ollama model load (empty `/api/chat`, same `num_ctx`/`keep_alive`),
   the STT engine on 1 s silence, Kokoro "Ready.". Ollama unreachable gives a WARNING and a spoken hint.
+- Barge-in (`audio/bargein.py`, `[audio] barge_in`): the user can talk over Jarvis. During playback the speaker's
+  hooks start a `BargeInMonitor` thread that reads the mic through `MicStream.subscribe()` (a side queue, so the wake
+  thread and recorder are unaffected). Per 32 ms frame: Silero VAD probability (onnxruntime, the `silero_vad.onnx`
+  in openwakeword's `resources/models`; inputs `input` [1,512] f32, `sr` i64, `h`/`c` [2,1,64]; energy VAD
+  fallback) and the echo gate (`EchoGate`, pure): mic RMS must exceed `margin` (2.5x at sensitivity 0.5) times the
+  expected echo = learned coupling * max playback RMS over the last 150 ms (`PlaybackTap`: the speaker reports each
+  block it writes, with its audible time = write time + device latency). Coupling = p90 of mic/playback RMS over
+  non-speech frames (`EchoCalibrator`; the startup "Online, sir." calibrates it, it keeps adapting). VAD must stay
+  high for `barge_in_min_ms` (gaps up to 100 ms tolerated). "Hey Jarvis" during playback always counts
+  (`barge_in_wake`, only while the wake thread is not using the model).
+  On trigger (`Assistant._barge_cb`, monitor thread): `speaker.interrupt()` fades out 30 ms and stops, the speaker
+  drops the rest of the reply (muted until `begin_turn`; confirmation prompts use `force=True` and still speak), the
+  agent turn keeps running silently and is awaited before the next turn (`_settle_interrupted`), which also rewrites
+  the last assistant message in history to the words actually spoken + `[interrupted by user]`. The next recording
+  starts from `MicStream.grab_since(onset)` = the pre-roll ring from ~300 ms before the speech was first detected,
+  passed to `Recorder.record_blocking(prefix=...)` (counts as speech), then the usual endpointing, STT and the next
+  turn in the same conversation, no wake word. A barge-in while a confirmation is pending does not mute: the
+  confirmation's own voice loop records it and the transcript resolves it. Barge-in during an out-of-turn
+  announcement queues an `activate` request (source `barge`). The chime and Jarvis's own voice never trigger it
+  (the monitor only runs while TTS plays; the echo gate handles the speaker-to-mic leak).
 - Logs: INFO per stage with timings (wake score, stt, llm steps, reply, tts first audio) to the
   console and `logs/jarvis.log` (rotating 1 MB x 3). `--debug-audio` prints mic RMS and wake score.
 - Latency (target: first audio < 1.5 s after end of speech for simple requests):
@@ -156,6 +183,53 @@ Claude Code transcripts in `~/.claude/projects` (safe).
   "Asking Claude, sir." (`SLOW_TOOL_NOTICE`) and shows the thinking state while the tool runs.
 - Fast-path tool actions use `("call", tool, json_args)`; `speak_result` fast paths (what's playing, play X on
   Spotify) speak the tool result instead of a canned reply.
+
+## Memory, reminders and briefing
+
+All three keep small JSON files in `%APPDATA%/Jarvis` (Linux fallback `~/.local/share/Jarvis`, see `store.py`:
+atomic writes, a broken file reads as empty).
+
+- **Memory** (`memory.py`, tools `remember` / `recall` / `forget` in `tools/memory_tools.py`). `memory.json` is a list of
+  `{id, text, created, source: "explicit"|"inferred"}`, capped at 200 (oldest inferred is dropped first). A new fact
+  that matches an existing one (same text, Jaccard >= 0.7 on stemmed content words, or a 3+ word subset) updates it
+  instead; negations are content words, so "I don't like tea" is not a duplicate of "I like tea". Passwords, keys,
+  PINs and similar are refused. Relevance is token overlap (4+ letter prefixes count). **Injection:** the static system
+  prompt only carries the rules; `Agent.handle` adds a `[Known about the user: a; b; c]` line after `[Now: ...]` on the
+  newest user message (`Agent.memory_block`, set by `extras.Extras`). At most 8 facts: everything when 8 or fewer are
+  stored, else up to 3 core facts (name, preferences, "main", family...) plus the best matches for the user's words.
+  It is added to the per-call copy of the messages only, never stored in history, so the KV cache of system prompt +
+  tool schemas stays valid. `recall` and `forget` speak facts back in the second person ("Your main project is Jarvis").
+- **Time phrases** (`timeparse.py`, pure): `parse_duration("an hour and a half")`, `parse_when(text, now)` for "in 20
+  minutes", "at 6pm", "at 18:30", "tomorrow at 9", "friday at 3pm", "tonight at 9", "day after tomorrow", noon,
+  midnight, "half past 7". The result is always in the future. A bare "at 9" means the next time that clock reading
+  happens; with an explicit day, 1-6 reads as pm and 7-12 as am. `strict=True` requires the whole text to be a time
+  expression (used to split "call mom at the office at 6pm").
+- **Reminders and timers** (`reminders.py`, tools in `tools/reminder_tools.py`): `set_timer`, `set_reminder(text,
+  when)`, `list_reminders`, `cancel_reminder(query)`. `reminders.json` holds pending items `{id, kind, text, label,
+  due (epoch), created, seconds}`. `Scheduler` runs as a background task started by `Extras.start` once Jarvis is
+  online and ticks every second; due items are removed from the store and announced through
+  `Assistant.announce` ("Sir, reminder: ..." / "Your 10 minute timer is done."), which waits for the current turn.
+  `reminders.chime` plays a gentle three-note descending chime first (when nobody is mid-turn). Items that came due
+  while Jarvis was off are announced once at start ("Sir, while you were away: ...") or, while the automatic briefing
+  is still due today, held and read as part of it.
+- **Briefing** (`briefing.py`, tool `briefing` in `tools/briefing_tool.py`). `compose()` is pure: greeting by time of
+  day (+ name from memory), date, weather for the configured city, today's remaining reminders, missed items, and
+  Claude Code sessions with activity in the last 24 h ("Claude finished work on <title> in <project> last night",
+  "still working", "waiting for your permission"). Weather is Open-Meteo (`api.open-meteo.com/v1/forecast`, 3 s timeout,
+  WMO code -> words, skipped silently on any failure); weather and the session scan run in parallel.
+  **Automatic:** `Extras.first_wake_briefing` runs in `run_turn` after the user's request was recorded, for wake-word
+  and hotkey activations only (not typed text or barge-in): if `due_today` (enabled, `auto_first_wake`, hour >=
+  `after_hour`, and `state.json` `last_briefing` is not today) it speaks the briefing, records it in history, writes
+  today's date to `state.json`, then the request is handled normally. Asking for the briefing yourself skips the
+  automatic one and counts for the day.
+- **Fast paths** (`fastpath.py`): "remember (that) X", "what do you remember (about me)", "forget (that|about) X", "set a
+  timer for 10 minutes" / "timer 5 minutes" / "set a 10 minute timer", "remind me in 20 minutes to X" / "remind me to
+  X at 6pm" / "set a reminder for 6pm to X", "what reminders do I have", "cancel the timer", "give me my briefing" /
+  "morning briefing" / "what's my day". All run the tool and speak its result. Anything unclear (no time, no timer
+  length, "remember to ...") goes to the model.
+- `extras.py` keeps the glue out of `__main__.py`: `Extras(assistant)` in `Assistant.__init__`, `extras.start(bg)` after
+  the "Online" announcement, `extras.first_wake_briefing(req, text)` in `run_turn`. Config: `[memory]`, `[reminders]`,
+  `[briefing]`. Tests use an autouse fixture (`tests/conftest.py`) that points `APPDATA` at a temp folder.
 
 ## Safety model
 

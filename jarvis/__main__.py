@@ -23,6 +23,7 @@ from .utterance import asks_question, fix_names, sounds_unfinished
 from .config import Config, load_config, repo_root
 from .llm import LLMError, OllamaClient
 from .tools import load_all
+from .extras import Extras
 from .tools.context import set_context
 
 # Saying one of these during a conversation ends it.
@@ -37,6 +38,7 @@ def _pick_farewell() -> str:
     return random.choice(_FAREWELLS)
 
 
+BARGE_STALE_SECONDS = 3.0  # a barge-in nobody picked up this fast is forgotten (the pre-roll ring is ~1.5 s)
 MAX_FOLLOW_UPS = 12  # back-and-forth answers in one turn without saying "Hey Jarvis" again
 FOLLOW_ON_TIMEOUT = 3.0  # seconds to wait for the rest of a cut-off sentence
 
@@ -73,6 +75,14 @@ class Assistant:
         claude_watch.cfg = cfg.claude_watch
         self._stt_secs = 0.0
         self._first_audio: float | None = None
+        # barge-in (talking over Jarvis), see audio/bargein.py
+        self.barge: Any = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._barge: Any = None  # BargeIn waiting for the next recording to pick it up
+        self._barge_event = asyncio.Event()
+        self._interrupted = False  # a reply was cut: history gets "[interrupted by user]" once the agent is done
+        self._bg_agent: asyncio.Future | None = None  # agent turn that keeps running (silently) after a barge-in
+        self._wake_listening = False  # the wake thread owns the wake model
 
         if voice:
             from .audio.mic import MicStream
@@ -88,6 +98,15 @@ class Assistant:
             self.stt = make_transcriber(cfg)
             self.speaker = KokoroSpeaker(self.bus, cfg.tts.voice, cfg.tts.lang_code, cfg.tts.speed, a.output_device,
                                          cfg.tts.fx, cfg.tts.fx_amount)
+            if a.barge_in:
+                from .audio.bargein import BargeInMonitor
+
+                self.barge = BargeInMonitor(self.mic, self.speaker.tap, a.barge_in_sensitivity, a.barge_in_min_ms,
+                                            wake=self.wake if a.barge_in_wake else None,
+                                            wake_ok=lambda: not self._wake_listening, on_barge=self._barge_cb)
+                self.speaker.on_playback_start = self.barge.start
+                self.speaker.on_playback_end = self.barge.stop
+                self.speaker.output_latency = "low"  # little device buffering: the interrupt fade is heard at once
         else:
             from .audio.tts import ConsoleSpeaker
 
@@ -96,11 +115,12 @@ class Assistant:
         self.llm = OllamaClient(cfg.ollama.url, cfg.ollama.model, cfg.ollama.think,
                                 cfg.ollama.timeout, cfg.ollama.num_ctx, cfg.ollama.keep_alive,
                                 cfg.ollama.max_reply_tokens)
-        self.confirmer = Confirmer(self.bus, self.speaker.speak, cfg.safety.confirm_timeout,
+        self.confirmer = Confirmer(self.bus, self._speak_forced, cfg.safety.confirm_timeout,
                                    listen=self.listen_text if voice else None)
         set_context(cfg, self.bus, self.announce)
         self.agent = Agent(self.llm, load_all(), self.bus, self.confirmer,
                            cfg.agent.max_steps, cfg.agent.max_history_messages, cfg.agent.stream_replies)
+        self.extras = Extras(self)  # memory block, reminder scheduler, morning briefing
 
     # ---- audio helpers ---------------------------------------------------
     async def warm_up(self) -> None:
@@ -132,6 +152,8 @@ class Assistant:
 
         jobs = [warm_llm()]
         if self.voice:
+            if self.barge is not None:
+                jobs.append(timed("barge-in vad", self.barge.load))
             jobs += [timed("wake word", self.wake.load),
                      warm("stt", self.stt.load, self.stt.warm_up),
                      warm("tts", self.speaker.load, self.speaker.warm_up)]
@@ -143,10 +165,16 @@ class Assistant:
         saved = self.recorder.no_speech_timeout
         if no_speech is not None:
             self.recorder.no_speech_timeout = no_speech
+        prefix = None
+        info = self._take_barge()
+        if info is not None:  # the user is already talking: keep the audio from the start of the barge-in
+            prefix = self.mic.grab_since(info.onset)
+            flush, before = False, None
+            log.info("recording after barge-in (%.1f s of pre-roll)", len(prefix) / 16000)
         try:
             audio = await asyncio.to_thread(
                 lambda: self.recorder.record_blocking(
-                    lambda lvl: self.bus.emit_nowait("level", rms=lvl), cancel, flush, before))
+                    lambda lvl: self.bus.emit_nowait("level", rms=lvl), cancel, flush, before, prefix))
         finally:
             self.recorder.no_speech_timeout = saved
         self.bus.emit_nowait("level", rms=0.0)
@@ -168,6 +196,75 @@ class Assistant:
         from .audio.mic import parse_device
 
         play_chime(parse_device(self.cfg.audio.output_device), blocking=True)
+
+    # ---- barge-in ---------------------------------------------------------
+    async def _speak_forced(self, text: str) -> None:
+        """Speech that must be heard even right after a barge-in muted the old reply (confirmation prompts)."""
+        await self.speaker.speak(text, force=True)
+
+    def _barge_cb(self, info: Any) -> None:
+        """Monitor thread: the user talked over Jarvis. Stop the voice at once, tell the loop."""
+        mute = not self.confirmer.pending  # a pending confirmation keeps its turn: the answer resolves it
+        self.speaker.interrupt(mute=mute)
+        if self._loop is not None:
+            self._loop.call_soon_threadsafe(self._on_barge, info, mute)
+
+    def _on_barge(self, info: Any, mute: bool) -> None:
+        self._barge = info
+        self._interrupted = self._interrupted or mute
+        self._barge_event.set()
+        self.bus.emit_nowait("state", state="listening")
+
+    def _barge_pending(self) -> bool:
+        return self._barge is not None and time.monotonic() - self._barge.at < BARGE_STALE_SECONDS
+
+    def _take_barge(self) -> Any:
+        info, self._barge = self._barge, None
+        self._barge_event.clear()
+        if info is not None and time.monotonic() - info.at >= BARGE_STALE_SECONDS:
+            return None
+        return info
+
+    async def _agent_interruptible(self, text: str) -> str | None:
+        """agent.handle, but a barge-in ends the wait: returns None and the agent finishes silently in the
+        background (it is awaited before the next turn, see _settle_interrupted)."""
+        task = asyncio.ensure_future(self.agent.handle(text, speaker=self.speaker))
+        if self.barge is None:
+            return await task
+        ev = asyncio.ensure_future(self._barge_event.wait())
+        try:
+            done, _ = await asyncio.wait({task, ev}, return_when=asyncio.FIRST_COMPLETED)
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
+        finally:
+            ev.cancel()
+        if task in done or not self._interrupted:  # (not interrupted: a confirmation; the voice loop takes it)
+            return await task
+        log.info("reply interrupted; agent turn finishes in the background")
+        self._bg_agent = task
+        task.add_done_callback(lambda t: t.cancelled() or t.exception())  # never "exception was never retrieved"
+        return None
+
+    async def _settle_interrupted(self) -> None:
+        """Before a new turn: let an interrupted agent turn finish, mark its reply as cut, speak again."""
+        task, self._bg_agent = self._bg_agent, None
+        if task is not None and not task.done():
+            await asyncio.wait({task}, timeout=60)
+            if not task.done():
+                task.cancel()
+        if self._interrupted:
+            self._interrupted = False
+            self._mark_interrupted()
+        self.speaker.begin_turn()
+
+    def _mark_interrupted(self) -> None:
+        """The last reply in history becomes what was actually spoken plus "[interrupted by user]"."""
+        spoken = " ".join(getattr(self.speaker, "spoken", []))
+        for msg in reversed(self.agent.history("default")):
+            if msg.get("role") == "assistant" and not msg.get("tool_calls"):
+                msg["content"] = f"{spoken} [interrupted by user]".strip()
+                return
 
     async def listen_text(self) -> str:
         """Record one utterance and transcribe (used for spoken yes/no). Cancel-safe."""
@@ -195,11 +292,15 @@ class Assistant:
     async def announce(self, text: str) -> None:
         """Speak a background announcement (e.g. Claude job finished) once the current turn ends."""
         async with self.turn_lock:
+            await self._settle_interrupted()
             self.bus.emit_nowait("state", state="speaking")
             try:
                 await self.speaker.speak(text)
             finally:
-                self.bus.emit_nowait("state", state="idle")
+                if not self._barge_pending():
+                    self.bus.emit_nowait("state", state="idle")
+        if self._barge_pending():  # the user talked over the announcement: take what they say as a request
+            self.requests.put_nowait(Request("activate", source="barge"))
 
     # ---- one turn --------------------------------------------------------
     async def run_fast(self, fp: fastpath.FastPath, text: str) -> None:
@@ -273,6 +374,7 @@ class Assistant:
             try:
                 self._stt_secs = 0.0
                 self._first_audio = None
+                await self._settle_interrupted()
                 text = req.text
                 if req.kind == "activate":
                     if not self.voice:
@@ -286,9 +388,18 @@ class Assistant:
                     text = await self.finish_utterance(text)
                 if not text:
                     return
+                await self.extras.first_wake_briefing(req, text)
                 a = self.cfg.audio
                 for _ in range(MAX_FOLLOW_UPS + 1):
                     reply = await self.respond(text)
+                    if self.voice and self._barge_pending():  # talked over Jarvis: that is the next turn
+                        text = await self.listen_barge_in()
+                        if text and not ENDERS.match(text.strip().lower()):
+                            continue
+                        if text:
+                            await self.say_safe(_pick_farewell())
+                            break
+                        reply = ""  # heard nothing usable: carry on as after a normal reply
                     if not self.voice or self._conversation_over:
                         break
                     asked = bool(reply) and asks_question(reply)
@@ -322,6 +433,15 @@ class Assistant:
             text = f"{text} {more}"
         return text
 
+    async def listen_barge_in(self) -> str:
+        """Record and transcribe the utterance the user started over Jarvis's voice (no wake word, no chime)."""
+        self.bus.emit_nowait("state", state="listening")
+        text = await self.record_text()
+        if text:
+            text = await self.finish_utterance(text)
+            log.info("barge-in utterance: '%s'", text)
+        return text
+
     async def listen_follow_up(self, wait: float) -> str:
         """Listen once (no wake word) after a reply. Silence means the user is done."""
         self.bus.emit_nowait("state", state="listening")
@@ -333,6 +453,7 @@ class Assistant:
 
     async def respond(self, text: str) -> str:
         """Answer one user utterance (fast path or agent). Returns what Jarvis said ('' if unknown)."""
+        await self._settle_interrupted()
         t_heard = time.perf_counter()
         self._conversation_over = False
         self.bus.emit_nowait("transcript", text=text, final=True)
@@ -345,7 +466,9 @@ class Assistant:
             self._log_latency(t_heard, None, None, self._first_audio)
             return ""
         self.bus.emit_nowait("state", state="speaking")  # sentences stream out as they finish
-        reply = await self.agent.handle(text, speaker=self.speaker)
+        reply = await self._agent_interruptible(text)
+        if reply is None:  # barge-in: the user took over while the agent was still working
+            return ""
         log.info("reply: '%s'", reply)
         if not self.agent.streamed:
             await self.speaker.speak(reply)
@@ -412,15 +535,18 @@ class Assistant:
         dropped = self.mic.flush()  # stale audio, e.g. our own TTS reply
         log.debug("flushed %.1f s of queued mic audio", dropped)
         stop = threading.Event()
+        self._wake_listening = True  # the barge-in monitor must not use the wake model meanwhile
         wake_task = asyncio.ensure_future(asyncio.to_thread(self.wake.wait_blocking, stop))
         req_task = asyncio.ensure_future(self.requests.get())
         try:
             done, _ = await asyncio.wait({wake_task, req_task}, return_when=asyncio.FIRST_COMPLETED)
         except asyncio.CancelledError:
             stop.set()
+            self._wake_listening = False
             raise
         stop.set()
         await asyncio.gather(wake_task, return_exceptions=True)
+        self._wake_listening = False
         if req_task in done:
             return req_task.result()
         req_task.cancel()
@@ -428,6 +554,7 @@ class Assistant:
         return Request("activate", source="wake") if woke else await self.requests.get()
 
     async def run(self, repl: bool = False) -> None:
+        self._loop = asyncio.get_running_loop()
         try:
             await self.bus.start()
         except OSError as exc:
@@ -451,11 +578,15 @@ class Assistant:
                 if not self.llm_ok:
                     await self.say_safe(NO_OLLAMA)
                 self.bus.emit_nowait("state", state="idle")
+            self.extras.start(bg)  # reminder scheduler
             while True:
                 done_bg = [t for t in bg if t.done()]
                 for t in done_bg:
                     t.result()  # propagate SystemExit / errors
-                req = await self.next_request_or_bg(bg)
+                if self._barge_pending():  # talked over speech that no turn was waiting for
+                    req = Request("activate", source="barge")
+                else:
+                    req = await self.next_request_or_bg(bg)
                 if req is not None:
                     await self.run_turn(req)
         finally:

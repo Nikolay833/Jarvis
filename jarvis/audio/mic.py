@@ -43,6 +43,9 @@ class MicStream:
         self._ring: deque[np.ndarray] = deque()
         self._ring_samples = 0
         self._ring_lock = threading.Lock()
+        self._fed_total = 0  # samples ever fed (absolute position of the ring end)
+        self._read_total = 0  # samples ever consumed or dropped from the queue (position of the next read)
+        self._subs: list[queue.Queue] = []
         self._stream: Any = None
         self.last_block_time = 0.0
         self.overflows = 0
@@ -87,9 +90,15 @@ class MicStream:
         with self._ring_lock:
             self._ring.append(data)
             self._ring_samples += len(data)
+            self._fed_total += len(data)
             while len(self._ring) > 1 and self._ring_samples - len(self._ring[0]) >= self._max_ring:
                 self._ring_samples -= len(self._ring.popleft())
-        self._q.put(data)
+            self._q.put(data)
+            for sub in self._subs:  # barge-in monitor etc.: independent of the consumer queue
+                try:
+                    sub.put_nowait((data, self._fed_total, self.last_block_time))
+                except queue.Full:
+                    pass
 
     # ---- consumer side ---------------------------------------------------
     def read(self, n: int, timeout: float = 0.1) -> np.ndarray | None:
@@ -107,6 +116,7 @@ class MicStream:
                 self._pending = np.concatenate((self._pending, blk))
             out = self._pending[:n].copy()
             self._pending = self._pending[n:]
+            self._read_total += n
             return out
 
     def flush(self) -> float:
@@ -119,7 +129,46 @@ class MicStream:
                     dropped += len(self._q.get_nowait())
                 except queue.Empty:
                     break
+            self._read_total += dropped
         return dropped / self.sample_rate
+
+    # ---- side channels ---------------------------------------------------
+    def position(self) -> int:
+        """Absolute number of samples fed so far (the end of the pre-roll ring)."""
+        with self._ring_lock:
+            return self._fed_total
+
+    def subscribe(self, maxsize: int = 400) -> "queue.Queue[tuple[np.ndarray, int, float]]":
+        """A private queue of (int16 block, absolute end position, arrival time) for every new block.
+        Reading it never takes audio away from `read()`. Call `unsubscribe` when done."""
+        q: queue.Queue = queue.Queue(maxsize=maxsize)
+        with self._ring_lock:
+            self._subs.append(q)
+        return q
+
+    def unsubscribe(self, q: "queue.Queue") -> None:
+        with self._ring_lock:
+            if q in self._subs:
+                self._subs.remove(q)
+
+    def grab_since(self, start: int) -> np.ndarray:
+        """Audio from absolute position `start` up to now, taken from the ring (clamped to its oldest sample),
+        and everything queued up to now is dropped: later `read()` calls continue right after the returned
+        audio. Used by barge-in so the utterance keeps the speech that triggered it."""
+        with self._read_lock:
+            with self._ring_lock:
+                ring = np.concatenate(list(self._ring)) if self._ring else np.zeros(0, dtype=np.int16)
+                end = self._fed_total
+                first = end - len(ring)
+                out = ring[max(0, start - first):].copy()
+                self._pending = np.zeros(0, dtype=np.int16)
+                while True:
+                    try:
+                        self._q.get_nowait()
+                    except queue.Empty:
+                        break
+                self._read_total = end
+        return out
 
     def preroll(self) -> np.ndarray:
         """Copy of the most recent ~1.5 s of audio (int16)."""

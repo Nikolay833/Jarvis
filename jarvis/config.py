@@ -83,6 +83,10 @@ class AudioConfig:
     follow_up_seconds: float = 6.0  # how long to wait for that answer
     conversation: bool = True  # keep listening after every reply; Jarvis goes away once you stop talking
     conversation_seconds: float = 5.0  # silence that ends the conversation
+    barge_in: bool = True  # talk over Jarvis to interrupt him (speakers + mic; echo is filtered out)
+    barge_in_sensitivity: float = 0.5  # 0..1, higher interrupts more easily (also more false interrupts)
+    barge_in_min_ms: float = 250.0  # speech must last this long (at sensitivity 0.5) to count
+    barge_in_wake: bool = True  # "Hey Jarvis" during speech always interrupts
 
 
 @dataclass
@@ -119,6 +123,31 @@ class ClaudeWatchConfig:
 
 
 @dataclass
+class MemoryConfig:
+    enabled: bool = True  # remember facts about you and show the relevant ones to the model each turn
+    max_facts: int = 200
+
+
+@dataclass
+class RemindersConfig:
+    enabled: bool = True  # timers and reminders (announced out loud when due)
+    chime: bool = True  # gentle chime before the announcement
+
+
+@dataclass
+class BriefingConfig:
+    enabled: bool = True  # "give me my briefing" and the automatic morning one
+    auto_first_wake: bool = True  # speak it on the first activation of the day
+    after_hour: int = 5  # ...but only after this hour (0-23), so a 1 a.m. wake does not use up the day
+    city: str = "Sofia"
+    latitude: float = 42.6977
+    longitude: float = 23.3219
+    include_weather: bool = True  # Open-Meteo (free, no key); skipped silently when offline
+    include_reminders: bool = True
+    include_claude: bool = True  # Claude Code sessions active since yesterday
+
+
+@dataclass
 class SpotifyConfig:
     client_id: str = ""      # optional Spotify developer app (free) for song search
     client_secret: str = ""
@@ -143,6 +172,9 @@ class Config:
     agent: AgentConfig = field(default_factory=AgentConfig)
     claude_code: ClaudeCodeConfig = field(default_factory=ClaudeCodeConfig)
     claude_watch: ClaudeWatchConfig = field(default_factory=ClaudeWatchConfig)
+    memory: MemoryConfig = field(default_factory=MemoryConfig)
+    reminders: RemindersConfig = field(default_factory=RemindersConfig)
+    briefing: BriefingConfig = field(default_factory=BriefingConfig)
     spotify: SpotifyConfig = field(default_factory=SpotifyConfig)
     files: FilesConfig = field(default_factory=FilesConfig)
     source: str = "defaults"

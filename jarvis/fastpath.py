@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 
+from .timeparse import WEEKDAYS, parse_duration, parse_when
 from .tools.apps import APP_MAP, SPECIAL
 from .tools.windows import _EXTRA_EXE
 
@@ -111,6 +112,148 @@ _SEARCH_OTHER_SITE = re.compile(r" (?:on|in|at) (?:youtube|amazon|ebay|reddit|gi
                                 r"spotify|maps|google maps|facebook|instagram|linkedin|bing)$")
 
 
+# ---- memory, timers and reminders, briefing -------------------------------------------------------------
+def _normalize_time(text: str) -> str:
+    """Like normalize() but keeps '6:30' and '1.5' intact and turns '10-minute' into '10 minute'."""
+    t = text.lower().replace("’", "'")
+    t = re.sub(r"\b([ap])\.m\.?", r"\1m", t).replace("-", " ")
+    t = re.sub(r"[^a-z0-9':. ]+", " ", t)
+    t = re.sub(r"(?<!\d)\.|\.(?!\d)", " ", t)
+    t = re.sub(r"(?<!\d):|:(?!\d)", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    t = _LEAD.sub("", t)
+    for _ in range(3):
+        t2 = _TRAIL.sub("", t).strip()
+        if t2 == t:
+            break
+        t = t2
+    return t
+
+
+_TIMER_FOR = re.compile(rf"^{_POLITE}(?:set|start|create|make|begin)(?: me)?(?: a| an| the)? timer (?:for|of) (?P<d>.+)$")
+_TIMER_ADJ = re.compile(rf"^{_POLITE}(?:set|start|create|make)(?: me)?(?: a| an)? (?P<d>.+?) timer$")
+_TIMER_BARE = re.compile(r"^timer (?:for )?(?P<d>.+)$")
+_REMIND_ME = re.compile(rf"^{_POLITE}remind me (?P<rest>.+)$")
+_SET_REMINDER = re.compile(rf"^{_POLITE}(?:set|create|add|make)(?: me)?(?: a| an)? reminder (?P<rest>(?:for|to|at|in|on) .+)$")
+_REM_LIST = _re(
+    r"(?:what|which) (?:reminders|timers)(?: and (?:reminders|timers))? (?:do i have|have i got|are (?:set|there|active|running))"
+    r"(?: set| right now| today)?"
+    r"|(?:list|show|read)(?: me| out)?(?: all)?(?: of)?(?: my| the)? (?:reminders|timers)"
+    r"|do i have any (?:reminders|timers)(?: set| today)?"
+    r"|how (?:much time|long) (?:is )?left(?: on (?:the|my) timer)?"
+    r"|how long (?:until|till) (?:my|the) timer(?: is done| goes off| ends)?")
+_REM_CANCEL = re.compile(
+    rf"^{_POLITE}(?:cancel|stop|delete|remove|clear|turn off)(?P<all> all| every)?(?: of)?(?: the| my)?"
+    r"(?: (?P<q>.+?))? (?P<kind>timers?|reminders?)(?: (?:for|about|to) (?P<q2>.+))?$")
+_BRIEFING = _re(
+    r"(?:(?:give me|tell me|read me|read out|play|do|run)? ?(?:my |the )?(?:morning |daily )?briefing"
+    r"|what(?:'s| is|s) my (?:morning )?briefing|brief me|what(?:'s| is|s) my day(?: like| looking like| going to be like)?"
+    r"|what does my day look like)")
+_RECALL = _re(
+    r"what do you (?:remember|know) about me|what do you remember(?: about me)?|what have i told you(?: about me)?"
+    r"|(?:tell|show|list) me (?:what you remember|everything you remember|my memories)(?: about me)?"
+    r"|what(?:'s| is) in your memory|what do you remember about (?P<q>.+)")
+_FORGET = re.compile(rf"^{_POLITE}forget(?: about| that)? (?P<q>.+)$")
+_FORGET_SKIP = {"it", "that", "this", "everything", "all", "about it", "that i said", "what i said", "what i told you"}
+_REMEMBER = re.compile(r"^(?:(?:can|could|would|will) you )?(?:please )?remember(?: that)? (?P<f>.+)$", re.IGNORECASE)
+_REMEMBER_SKIP = re.compile(r"^(?:to|what|when|where|how|why|who|which|if|me|us|the way|whether|i said)\b", re.IGNORECASE)
+_WHEN_AT = re.compile(rf"(?<= )(?=(?:in|at|on|after|tomorrow|tonight|today|this|next|\d|{'|'.join(WEEKDAYS)})\b)")
+
+
+def _clean_original(text: str) -> str:
+    """The utterance with its case kept, minus the 'Jarvis' lead and trailing punctuation/politeness."""
+    t = re.sub(r"^\s*(?:(?:hey|ok|okay)\s+)?jarvis\b[\s,.:!-]*", "", text.strip(), flags=re.IGNORECASE)
+    t = t.strip().rstrip(" .!?,;")
+    for _ in range(3):
+        t = re.sub(r"(?:[\s,]+(?:please|thanks|thank you)|\s*,\s*(?:sir|jarvis))$", "", t,
+                   flags=re.IGNORECASE).rstrip(" .!?,;")
+    return t
+
+
+def _timer_action(seconds: float) -> tuple[str, ...]:
+    return _call("set_timer", minutes=int(seconds // 60), seconds=round(seconds % 60, 3) if seconds % 1 else int(seconds % 60))
+
+
+def _match_timer(t: str) -> FastPath | None:
+    for rx in (_TIMER_FOR, _TIMER_ADJ, _TIMER_BARE):
+        m = rx.match(t)
+        if m:
+            secs = parse_duration(m.group("d"))
+            if secs is not None:
+                return FastPath("timer", "Setting the timer, sir.", _timer_action(secs), speak_result=True)
+            return None
+    return None
+
+
+def _split_reminder(rest: str, now: datetime) -> tuple[str, str] | None:
+    """('call mom', 'at 6pm') from 'to call mom at 6pm' / 'in 20 minutes to call mom' (None if no clear time)."""
+    m = re.match(r"^(?:to|that|about) (?P<body>.+)$", rest)
+    if m:  # text first, time last: try the earliest split whose tail is purely a time
+        body = m.group("body")
+        for pos in sorted({x.start() for x in _WHEN_AT.finditer(body)}):
+            text, when = body[:pos].strip(), body[pos:].strip()
+            if text and parse_when(when, now, strict=True) is not None:
+                return text, when
+        return None
+    for sep in re.finditer(r" (?:to|that|about) ", rest):  # time first
+        when, text = rest[:sep.start()].strip(), rest[sep.end():].strip()
+        if when and text and parse_when(when, now, strict=True) is not None:
+            return text, when
+    return None
+
+
+def _match_reminder(t: str, now: datetime) -> FastPath | None:
+    m = _REMIND_ME.match(t) or _SET_REMINDER.match(t)
+    if not m:
+        return None
+    rest = re.sub(r"^for ", "", m.group("rest"))
+    parts = _split_reminder(rest, now)
+    if parts is None:
+        return None
+    text, when = parts
+    return FastPath("reminder", "Setting the reminder, sir.", _call("set_reminder", text=text, when=when),
+                    speak_result=True)
+
+
+def _match_assistant(text: str, now: datetime) -> FastPath | None:
+    """Memory, timers, reminders and the briefing."""
+    t = _normalize_time(text)
+    if not t:
+        return None
+    m = _REMEMBER.match(_clean_original(text))
+    if m:
+        fact = m.group("f").strip()
+        if fact and not _REMEMBER_SKIP.match(fact):
+            return FastPath("remember", "Noted, sir.", _call("remember", fact=fact), speak_result=True)
+        return None
+    m = _RECALL.match(t)
+    if m:
+        return FastPath("recall", "Let me think, sir.", _call("recall", query=(m.groupdict().get("q") or "").strip()),
+                        speak_result=True)
+    m = _FORGET.match(t)
+    if m:
+        q = m.group("q").strip()
+        if q in _FORGET_SKIP:
+            return None
+        return FastPath("forget", "Forgotten, sir.", _call("forget", query=q), speak_result=True)
+    fp = _match_timer(t)
+    if fp is not None:
+        return fp
+    fp = _match_reminder(t, now)
+    if fp is not None:
+        return fp
+    if _REM_LIST.match(t):
+        return FastPath("reminders", "Let me check, sir.", _call("list_reminders"), speak_result=True)
+    m = _REM_CANCEL.match(t)
+    if m:
+        parts = [(m.group("all") or "").strip(), m.group("q") or "", m.group("kind"), m.group("q2") or ""]
+        query = " ".join(x for x in parts if x)
+        return FastPath("reminders", "Cancelling, sir.", _call("cancel_reminder", query=query), speak_result=True)
+    if _BRIEFING.match(t):
+        return FastPath("briefing", "One moment, sir.", _call("briefing"), speak_result=True)
+    return None
+
+
 def _known_window_app(name: str) -> bool:
     return name in APP_MAP or name in SPECIAL or name in _EXTRA_EXE
 
@@ -141,6 +284,9 @@ def match(text: str, now: datetime | None = None) -> FastPath | None:
         return FastPath("day", f"It's {now.strftime('%A')}, sir.")
     if _DATE.match(t):
         return FastPath("date", f"Today is {format_date(now)}, sir.")
+    fp = _match_assistant(text, now)
+    if fp is not None:
+        return fp
     if _LOCK.match(t):
         return FastPath("lock", "Locking the PC, sir.", ("lock_pc",))
     if _MIN_ALL.match(t):

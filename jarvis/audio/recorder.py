@@ -114,7 +114,8 @@ class Recorder:
 
     def record_blocking(self, on_level: Callable[[float], None] | None = None,
                         cancel: threading.Event | None = None, flush: bool = False,
-                        before: Callable[[], None] | None = None) -> np.ndarray:
+                        before: Callable[[], None] | None = None,
+                        prefix: np.ndarray | None = None) -> np.ndarray:
         """Record one utterance from the shared mic. Float32 mono 16 kHz; empty if nobody spoke.
 
         Recording starts with the audio queued right now. After a wake word that is the audio
@@ -122,8 +123,12 @@ class Recorder:
         starting cold (hotkey, spoken confirmation) to drop stale queued audio.
         `before` (e.g. the chime) runs first; the mic keeps queueing meanwhile and the energy it
         produced is ignored for endpointing, but the audio is kept in case the user spoke over it.
+        `prefix` (int16, barge-in): speech already in progress. It starts the recording and counts as
+        speech, so the endpointer only waits for the silence after it.
         """
         floor = estimate_noise_floor(self.mic.preroll())  # taken before flush: ambient noise
+        if prefix is not None:
+            floor = 0.0  # the pre-roll holds Jarvis's own voice; do not raise the threshold with it
         if flush:
             self.mic.flush()
         ignore = 0.0
@@ -134,6 +139,9 @@ class Recorder:
         det = EndpointDetector(self.silence_seconds, self.max_seconds, self.no_speech_timeout,
                                after_wake=True, noise_floor=floor, ignore_seconds=ignore)
         chunks: list[np.ndarray] = []
+        if prefix is not None and len(prefix):
+            chunks.append(np.asarray(prefix, dtype=np.int16))
+            det.speech_started = True
         dt = BLOCK / SAMPLE_RATE
         stalled = 0.0
         reason = "cancelled"

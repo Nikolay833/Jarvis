@@ -28,7 +28,10 @@ SYSTEM_PROMPT = """You are Jarvis, a personal assistant living on the user's Win
 Persona: warm, quick, dry-witted and British, like a trusted friend who happens to run the house. You may call the user "sir", but at most once in a reply and often not at all.
 Your replies are spoken aloud, so talk like a person in a real conversation: contractions, natural rhythm, varied wording (never the same stock phrase twice in a row), a little personality. For commands, one short sentence is plenty. For questions, chat, advice or feelings, talk freely and naturally, a few sentences, like you would to a friend; ask a follow-up question when it genuinely helps. Plain spoken words only: no markdown, no bullet points, no emoji, no URLs read out in full, no numbered "1." lists; when listing things say "the first is…, then…, and finally…".
 The newest user message starts with a line like "[Now: Wednesday 01 October 2026, 18:42]" giving the current date and time; use it when needed and never read it back unprompted.
+The newest user message may also have a line like "[Known about the user: ...]" listing facts you remembered; use them naturally and never read the list back unprompted.
 Use the tools to act on the PC; never claim to have done something you did not do with a tool.
+Memory: when the user says "remember X", call remember with a short fact (e.g. "Prefers Spotify for music"). When they clearly state a lasting personal fact or preference ("I prefer Spotify", "my main project is Jarvis", "call me Nikolay"), also call remember with source "inferred" and acknowledge in a few words; do not store moods, one-off requests or guesses, and never store passwords, keys or other secrets. recall answers "what do you remember", forget removes a fact.
+Timers and reminders (announced out loud when due): set_timer, set_reminder(text, when) with the user's own words for when ("in 20 minutes", "at 6pm", "tomorrow at 9"; ask when if it is missing), list_reminders, cancel_reminder. For "give me my briefing" call briefing and say its text as given.
 If a request is ambiguous and a wrong guess could do harm, ask one short question first.
 Risky tools (deleting, installing, stopping things, running Claude Code) ask the user for approval automatically; just call the tool.
 For coding work in a project folder, use claude_code_run. For simple PC questions, use system_info or run_powershell.
@@ -199,7 +202,8 @@ class _Out:
 
 class Agent:
     def __init__(self, llm: LLM, registry: Registry, bus: Any, confirmer: Confirmer,
-                 max_steps: int = 8, max_history: int = 30, stream_replies: bool = True) -> None:
+                 max_steps: int = 8, max_history: int = 30, stream_replies: bool = True,
+                 memory_block: Callable[[str], str] | None = None) -> None:
         self.llm = llm
         self.registry = registry
         self.bus = bus
@@ -207,6 +211,8 @@ class Agent:
         self.max_steps = max_steps
         self.max_history = max_history
         self.stream_replies = stream_replies
+        # user text -> "[Known about the user: ...]\n" (or ""): goes on the newest user message only
+        self.memory_block = memory_block
         self.timing: dict[str, float | None] = {}
         self.first_audio_at: float | None = None  # perf_counter of the first spoken audio, if streamed
         self.streamed = False  # True if the last handle() already spoke its reply via the stream
@@ -241,6 +247,15 @@ class Agent:
     @staticmethod
     def now_prefix(now: datetime | None = None) -> str:
         return (now or datetime.now()).strftime("[Now: %A %d %B %Y, %H:%M]\n")
+
+    def known_prefix(self, text: str) -> str:
+        if self.memory_block is None:
+            return ""
+        try:
+            return self.memory_block(text) or ""
+        except Exception:  # noqa: BLE001 - memory must never break a turn
+            log.warning("memory lookup failed", exc_info=True)
+            return ""
 
     @staticmethod
     def _with_now(msgs: list[dict[str, Any]], prefix: str) -> list[dict[str, Any]]:
@@ -328,7 +343,7 @@ class Agent:
         self.trim(session)
         msgs = self.history(session)
         tools = self.registry.schemas()
-        prefix = self.now_prefix()
+        prefix = self.now_prefix() + self.known_prefix(text)
         out = _Out(speaker) if speaker is not None else None
         self.timing = {"start": time.perf_counter(), "first_token": None}
         self.streamed = False

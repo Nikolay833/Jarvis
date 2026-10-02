@@ -29,6 +29,17 @@ Jarvis plays a soft chime when it starts listening, says "Online, sir." when rea
 `logs/jarvis.log`. If nothing happens, run `python -m jarvis --debug-audio` to see the
 live mic level and wake score (twice a second).
 
+## Talking over Jarvis (barge-in)
+
+You can interrupt him mid-sentence: start talking while he speaks and he fades out, drops the rest of
+the reply and listens, keeping the words you had already begun. No headset needed: the mic level is
+compared with what he is playing, so his own voice from the speakers does not interrupt him (it learns
+the speaker-to-mic coupling from "Online, sir."). Saying "Hey Jarvis" also interrupts. Config `[audio]`:
+`barge_in`, `barge_in_sensitivity` (0..1; raise it if he does not stop, lower it if he stops himself),
+`barge_in_min_ms`, `barge_in_wake`. Uses Silero VAD (`onnxruntime`, model file from openWakeWord);
+`logs/jarvis.log` shows `barge-in detected (vad .., mic/echo ratio ..)`, and with `-v` also the
+suppressed-as-echo frames.
+
 ## Speed
 
 Replies stream into speech sentence by sentence, simple requests (time, date, "open chrome",
@@ -89,6 +100,16 @@ Audition presets with `python -m jarvis.voices` (`--save DIR` writes wavs;
   `.venv\Scripts\python scripts\install_claude_hooks.py` and remove them with `... --uninstall`. They edit
   `~/.claude/settings.json` (a timestamped backup is written first) and only send events to the local Jarvis.
   Tune in `[claude_watch]` in `config.toml` (`min_turn_seconds` skips short turns).
+- Memory: "remember that my main project is Jarvis", "what do you remember", "forget my favourite colour". Jarvis also
+  saves lasting preferences you state clearly ("I prefer Spotify", "call me Nikolay") and says so; he never stores
+  passwords or keys. Facts live in `%APPDATA%\Jarvis\memory.json` (edit or delete it freely) and the relevant ones
+  are shown to the model with each request.
+- Timers and reminders: "set a timer for 10 minutes", "remind me in 20 minutes to call mom", "remind me to pay rent
+  tomorrow at 9", "what reminders do I have", "cancel the timer". They survive restarts; anything that came due while
+  Jarvis was off is announced when he starts. Settings in `[reminders]`.
+- Briefing: "give me my briefing" (or "what's my day"): greeting, date, weather, today's reminders and what Claude Code
+  did lately. It is also spoken automatically the first time you wake Jarvis each day after 05:00. Weather comes from
+  Open-Meteo (free, no key) for the city in `[briefing]` (default Sofia; set `city`, `latitude`, `longitude`).
 
 ## Safety
 

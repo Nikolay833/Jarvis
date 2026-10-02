@@ -61,6 +61,10 @@ follow_up = true         # after Jarvis asks you something, listen for your answ
 follow_up_seconds = 6.0  # how long to wait for that answer
 conversation = true      # keep listening after every reply (no "Hey Jarvis"); he leaves once you stop talking
 conversation_seconds = 5.0  # silence that ends the conversation
+barge_in = true          # talk over Jarvis to interrupt him; his own voice from the speakers is filtered out
+barge_in_sensitivity = 0.5  # 0..1: higher interrupts sooner (lower echo margin, shorter speech) but misfires more
+barge_in_min_ms = 250.0  # how long you must talk over him (at sensitivity 0.5)
+barge_in_wake = true     # saying "Hey Jarvis" while he talks always interrupts
 
 [bus]
 host = "127.0.0.1"
@@ -86,6 +90,25 @@ enabled = true
 announce_finish = true      # "Sir, Claude finished in <project>: ..."
 announce_permission = true  # "Sir, Claude needs your permission in <project>."
 min_turn_seconds = 20.0     # only announce "finished" if the turn took at least this long (seconds)
+
+[memory]
+enabled = true           # "remember that ...", "what do you remember", "forget ...": facts live in %APPDATA%\Jarvis\memory.json
+max_facts = 200
+
+[reminders]
+enabled = true           # "set a timer for 10 minutes", "remind me at 6pm to ...": announced out loud when due
+chime = true             # gentle chime before the announcement
+
+[briefing]
+enabled = true           # "give me my briefing": greeting, date, weather, reminders, Claude sessions
+auto_first_wake = true   # speak it automatically the first time you wake Jarvis each day
+after_hour = 5           # ...after this hour (0-23)
+city = "Sofia"
+latitude = 42.6977
+longitude = 23.3219
+include_weather = true   # Open-Meteo, free, no key; skipped silently if offline
+include_reminders = true
+include_claude = true    # Claude Code sessions active since yesterday
 
 [spotify]
 # Optional. Lets "play <song> on Spotify" find the exact track. Works on the FREE Spotify plan:

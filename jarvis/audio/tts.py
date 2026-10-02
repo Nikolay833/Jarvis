@@ -12,12 +12,14 @@ from typing import Any
 
 import numpy as np
 
+from .bargein import PlaybackTap
 from .recorder import display_level, rms_of
 from .mic import parse_device
 from .voicefx import apply_fx
 
 SAMPLE_RATE = 24000
 PLAY_BLOCK = 800  # 33 ms -> about 30 level events per second
+FADE_SAMPLES = 720  # 30 ms fade-out when interrupted (fits in one play block)
 
 log = logging.getLogger("jarvis.tts")
 
@@ -110,6 +112,21 @@ def _cuda_available() -> bool:
         return False
 
 
+def fade_out(block: np.ndarray, n: int = FADE_SAMPLES) -> np.ndarray:
+    """Linear fade to silence over the first n samples of `block`, silence after (no click on interrupt)."""
+    out = np.zeros(len(block), dtype=np.float32)
+    n = min(n, len(block))
+    if n:
+        out[:n] = block[:n].astype(np.float32) * np.linspace(1.0, 0.0, n, dtype=np.float32)
+    return out
+
+
+def truncate_words(sentence: str, fraction: float) -> str:
+    """The first `fraction` of the words of a sentence (what was spoken before an interruption)."""
+    words = sentence.split()
+    return " ".join(words[:int(len(words) * min(1.0, max(0.0, fraction)))])
+
+
 class ConsoleStream:
     """Streaming API of the console speaker: prints each pushed sentence at once."""
 
@@ -139,12 +156,15 @@ class ConsoleSpeaker:
         self.bus.emit_nowait("reply", text=sentence)
         print(f"{self.prefix}{sentence}", flush=True)
 
-    async def speak(self, text: str) -> None:
+    async def speak(self, text: str, force: bool = False) -> None:
         for sentence in split_sentences(text):
             self.say_sentence(sentence)
 
-    def start_stream(self) -> ConsoleStream:
+    def start_stream(self, force: bool = False) -> ConsoleStream:
         return ConsoleStream(self)
+
+    def begin_turn(self) -> None:
+        pass
 
     def stop(self) -> None:
         pass
@@ -156,21 +176,32 @@ class KokoroStream:
     Synthesis of sentence N+1 overlaps playback of sentence N (see KokoroSpeaker._speak_blocking).
     """
 
-    def __init__(self, speaker: "KokoroSpeaker") -> None:
+    def __init__(self, speaker: "KokoroSpeaker", force: bool = False) -> None:
         self._speaker = speaker
         self._q: queue.Queue[str | None] = queue.Queue()
         self.first_audio_at: float | None = None
         self.pushed = 0
+        self.force = force  # speak even after a barge-in muted the speaker (confirmation prompts)
+        self.epoch = speaker.epoch
         self._task = asyncio.get_running_loop().create_task(self._run())
+
+    @property
+    def cancelled(self) -> bool:
+        """True once a barge-in cut the reply this stream belongs to: it drops everything further."""
+        sp = self._speaker
+        return not self.force and (sp.muted or self.epoch != sp.epoch)
 
     async def _run(self) -> None:
         sp = self._speaker
         async with sp._lock:
+            if self.cancelled:
+                return
             sp._stop.clear()
+            sp._interrupt.clear()
             await asyncio.to_thread(sp._speak_blocking, self._q, self)
 
     def push(self, sentence: str) -> None:
-        if sentence.strip():
+        if sentence.strip() and not self.cancelled:
             self.pushed += 1
             self._q.put_nowait(sentence)
 
@@ -193,6 +224,15 @@ class KokoroSpeaker:
         self._pipeline: Any = None
         self._stop = threading.Event()
         self._lock = asyncio.Lock()  # one utterance at a time
+        # barge-in
+        self._interrupt = threading.Event()  # fade out and stop the current utterance
+        self.muted = False  # after an interrupt: later sentences of the cut reply are dropped
+        self.epoch = 0
+        self.spoken: list[str] = []  # sentences (the last one possibly cut) of the latest utterance
+        self.tap = PlaybackTap()  # what is playing, for the echo gate
+        self.output_latency: Any = None  # sounddevice latency ("low" keeps the interrupt fade tight)
+        self.on_playback_start: Any = None  # hooks: the barge-in monitor
+        self.on_playback_end: Any = None
 
     def load(self) -> None:
         if self._pipeline is None:
@@ -250,18 +290,38 @@ class KokoroSpeaker:
         """Interrupt current speech (thread-safe)."""
         self._stop.set()
 
-    async def speak(self, text: str) -> None:
+    def interrupt(self, mute: bool = True) -> None:
+        """Barge-in (thread-safe): fade out ~30 ms and stop. With `mute` the rest of the reply being
+        generated is dropped too (until `begin_turn`); streams opened with force=True still speak."""
+        if mute:
+            self.muted = True
+            self.epoch += 1
+        self._interrupt.set()
+
+    def begin_turn(self) -> None:
+        """A new turn starts: speak again."""
+        self.muted = False
+
+    async def speak(self, text: str, force: bool = False) -> None:
         sentences = split_sentences(text)
         if not sentences:
             return
-        stream = self.start_stream()
+        stream = self.start_stream(force)
         for s in sentences:
             stream.push(s)
         await stream.finish()
 
-    def start_stream(self) -> KokoroStream:
+    def start_stream(self, force: bool = False) -> KokoroStream:
         """Begin an utterance fed sentence by sentence. Must be called inside the event loop."""
-        return KokoroStream(self)
+        return KokoroStream(self, force)
+
+    @staticmethod
+    def _notify(hook: Any) -> None:
+        if hook is not None:
+            try:
+                hook()
+            except Exception:  # noqa: BLE001 - the barge-in monitor must never break speech
+                log.exception("playback hook failed")
 
     def _speak_blocking(self, src: "queue.Queue[str | None]", stream: KokoroStream | None = None) -> None:
         """Play sentences taken from `src` (None ends the utterance) while synthesizing the next."""
@@ -301,11 +361,20 @@ class KokoroSpeaker:
 
         t0 = time.perf_counter()
         first_audio = True
+        self.spoken = []
         t = threading.Thread(target=producer, daemon=True)
         t.start()
+        kw: dict[str, Any] = {} if self.output_latency is None else {"latency": self.output_latency}
         try:
-            with sd.OutputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32", device=self.device) as out:
-                while not self._stop.is_set():
+            with sd.OutputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32", device=self.device,
+                                 **kw) as out:
+                try:
+                    self.tap.latency = min(0.5, max(0.0, float(getattr(out, "latency", 0.0))))
+                except (TypeError, ValueError):
+                    self.tap.latency = 0.0
+                self._notify(self.on_playback_start)
+                faded = False
+                while not self._stop.is_set() and not self._interrupt.is_set():
                     try:
                         item = q.get(timeout=0.1)
                     except queue.Empty:
@@ -320,14 +389,30 @@ class KokoroSpeaker:
                             stream.first_audio_at = now
                         log.info("tts first audio after %.1f s", now - t0)
                     self.bus.emit_nowait("reply", text=sentence)
+                    self.spoken.append(sentence)
                     for i in range(0, len(audio), PLAY_BLOCK):
                         if self._stop.is_set():
                             break
                         block = audio[i:i + PLAY_BLOCK]
+                        if self._interrupt.is_set():  # barge-in: one last block, faded out
+                            block = fade_out(block)
+                            faded = True
                         self.bus.emit_nowait("level", rms=display_level(rms_of(block), gain=4.0))
+                        self.tap.note(block, SAMPLE_RATE)
                         out.write(block.reshape(-1, 1))
+                        if faded:
+                            kept = truncate_words(sentence, i / max(1, len(audio)))
+                            if kept:
+                                self.spoken[-1] = kept
+                            else:
+                                self.spoken.pop()
+                            break
+                    if faded:
+                        break
         finally:
             self._stop.set()  # lets the producer exit if we left early
             t.join(timeout=2)
             self._stop.clear()
+            self._interrupt.clear()
+            self._notify(self.on_playback_end)
             self.bus.emit_nowait("level", rms=0.0)
