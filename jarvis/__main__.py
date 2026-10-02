@@ -72,6 +72,7 @@ class Assistant:
         self.mic: Any = None
         self.llm_ok = False
         self._announce_tasks: set[asyncio.Task] = set()
+        self._claude_perm_lock = asyncio.Lock()  # Claude permission questions are asked one at a time
         claude_watch.cfg = cfg.claude_watch
         self._stt_secs = 0.0
         self._first_audio: float | None = None
@@ -309,7 +310,14 @@ class Assistant:
             self.speaker.stop()
             return
         if fp.speak_result:
-            reply = await self._fast_result(fp)
+            if fp.kind == "vision":  # slow (model load + inference): say something while it runs
+                work = asyncio.create_task(self._fast_result(fp))
+                self.bus.emit_nowait("state", state="speaking")
+                await self.speaker.speak(fp.reply)
+                self.bus.emit_nowait("state", state="thinking")
+                reply = await work
+            else:
+                reply = await self._fast_result(fp)
             self.agent.add_exchange(text, reply)  # history keeps the details (paths) for follow-ups
             self.bus.emit_nowait("state", state="speaking")
             await self.speaker.speak(reply.split(DETAILS_MARK, 1)[0].strip())
@@ -498,6 +506,20 @@ class Assistant:
             self._announce_tasks.add(task)
             task.add_done_callback(self._announce_tasks.discard)
 
+    async def on_claude_permission(self, msg: dict[str, Any]) -> None:
+        """A PermissionRequest hook is waiting: ask by voice, answer over the bus. Anything unclear is 'ask'
+        (Claude then shows its own prompt); the hook waits at most `timeout` seconds."""
+        decision = "ask"
+        try:
+            limit = max(5.0, min(float(msg.get("timeout") or 45.0), 60.0) - 1.0)
+            async with self._claude_perm_lock:  # one spoken question at a time
+                decision = await asyncio.wait_for(claude_watch.decide_permission(msg, self.confirmer), limit)
+        except Exception:  # noqa: BLE001 - incl. timeout: never decide on a failure
+            log.exception("claude permission request failed")
+            decision = "ask"
+        log.info("claude permission %s %s -> %s", msg.get("tool_name"), msg.get("session_id"), decision)
+        self.bus.emit_nowait("claude_permission_result", id=str(msg.get("id") or ""), decision=decision)
+
     async def dispatch_bus(self) -> None:
         while True:
             msg = await self.bus.inbound.get()
@@ -508,6 +530,10 @@ class Assistant:
                 self.submit_text(str(msg.get("text", "")))
             elif kind == "claude_event":
                 self.on_claude_event(msg)
+            elif kind == "claude_permission":
+                task = asyncio.ensure_future(self.on_claude_permission(msg))
+                self._announce_tasks.add(task)
+                task.add_done_callback(self._announce_tasks.discard)
             elif kind == "map_closed":
                 from .tools import maps_tools
 

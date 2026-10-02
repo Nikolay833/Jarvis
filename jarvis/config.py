@@ -120,6 +120,7 @@ class ClaudeWatchConfig:
     announce_finish: bool = True  # "Sir, Claude finished in <project>: ..."
     announce_permission: bool = True  # "Sir, Claude needs your permission in <project>."
     min_turn_seconds: float = 20.0  # announce "finished" only if the turn took at least this long
+    voice_approval: bool = True  # ask by voice "Shall I allow it?" for Claude permission prompts (PermissionRequest hook)
 
 
 @dataclass
@@ -164,6 +165,19 @@ class MapsConfig:
 
 
 @dataclass
+class VisionConfig:
+    """Computer vision: look_at_screen / read_screen_text (screen) and look_through_webcam (camera)."""
+    model: str = "qwen2.5vl:3b"  # small VLM; the 7b does not fit next to qwen3:14b + Whisper on 16 GB
+    url: str = ""  # Ollama URL for vision; empty = [ollama] url
+    keep_alive: str = "2m"  # unload soon after use so the main model keeps its VRAM ("-1" = keep loaded)
+    max_side: int = 1280  # longest image side sent to the model, in pixels
+    timeout: float = 90.0  # seconds per vision request (the first call also loads the model)
+    max_reply_tokens: int = 400
+    webcam_enabled: bool = False  # privacy: the camera is never used unless this is true AND you ask
+    webcam_index: int = 0
+
+
+@dataclass
 class FilesConfig:
     allowed_roots: list[str] = field(default_factory=list)
 
@@ -188,6 +202,7 @@ class Config:
     spotify: SpotifyConfig = field(default_factory=SpotifyConfig)
     maps: MapsConfig = field(default_factory=MapsConfig)
     files: FilesConfig = field(default_factory=FilesConfig)
+    vision: VisionConfig = field(default_factory=VisionConfig)
     source: str = "defaults"
 
 

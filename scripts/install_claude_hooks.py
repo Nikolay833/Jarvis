@@ -3,8 +3,10 @@
     python scripts/install_claude_hooks.py                # install / update
     python scripts/install_claude_hooks.py --uninstall    # remove only Jarvis entries
 
-Registers `"<venv python>" -m jarvis.claude_hook` for Stop and for Notification (one entry per notification
-type, exact-string matchers). Existing settings and other hooks are kept; a timestamped backup is written first.
+Registers `"<venv python>" -m jarvis.claude_hook` for Stop, Notification (one entry per notification type,
+exact-string matchers), PostToolUse / PostToolUseFailure (edits and shell commands, for progress reports) and
+PermissionRequest (voice approval; timeout 60 s, the hook itself waits at most 45 s and prints nothing on any
+failure so Claude's own prompt appears). Existing settings and other hooks are kept; a timestamped backup is written first.
 Idempotent: entries whose command contains "jarvis.claude_hook" are replaced. Needs no jarvis imports.
 """
 
@@ -22,6 +24,8 @@ from typing import Any
 MARKER = "jarvis.claude_hook"
 NOTIFICATION_TYPES = ("permission_prompt", "agent_needs_input", "elicitation_dialog")
 TIMEOUT = 10
+PERMISSION_TIMEOUT = 60
+TOOL_MATCHER = "Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit"
 
 
 def default_python() -> str:
@@ -63,16 +67,20 @@ def _strip_ours(entries: Any) -> list[Any]:
     return out
 
 
-def _hook(command: str, matcher: str) -> dict[str, Any]:
-    return {"matcher": matcher, "hooks": [{"type": "command", "command": command, "timeout": TIMEOUT}]}
+def _hook(command: str, matcher: str, timeout: int = TIMEOUT) -> dict[str, Any]:
+    return {"matcher": matcher, "hooks": [{"type": "command", "command": command, "timeout": timeout}]}
 
 
 def merge(settings: dict[str, Any], command: str) -> dict[str, Any]:
-    """Settings with the Jarvis Stop and Notification hooks added (old Jarvis entries replaced)."""
+    """Settings with the Jarvis hooks added (old Jarvis entries replaced)."""
     out = dict(settings)
     hooks = dict(out.get("hooks") or {})
     hooks["Stop"] = _strip_ours(hooks.get("Stop")) + [_hook(command, "")]
     hooks["Notification"] = _strip_ours(hooks.get("Notification")) + [_hook(command, t) for t in NOTIFICATION_TYPES]
+    for event in ("PostToolUse", "PostToolUseFailure"):
+        hooks[event] = _strip_ours(hooks.get(event)) + [_hook(command, TOOL_MATCHER)]
+    hooks["PermissionRequest"] = _strip_ours(hooks.get("PermissionRequest")) + [
+        _hook(command, "", PERMISSION_TIMEOUT)]
     out["hooks"] = hooks
     return out
 

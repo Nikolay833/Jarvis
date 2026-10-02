@@ -1,9 +1,12 @@
 # Jarvis setup for Windows 11 / 10. Run from the repo root or anywhere:
-#   powershell -ExecutionPolicy Bypass -File scripts\setup_windows.ps1 [-Model qwen3:14b] [-Parakeet]
+#   powershell -ExecutionPolicy Bypass -File scripts\setup_windows.ps1 [-Model qwen3:14b] [-Parakeet] [-SkipVision] [-Webcam]
 param(
     [string]$Model = "qwen3:14b",
     [string]$Python = "py -3.11",
-    [switch]$Parakeet  # also install the optional NVIDIA Parakeet STT engine (onnx-asr)
+    [switch]$Parakeet,  # also install the optional NVIDIA Parakeet STT engine (onnx-asr)
+    [string]$VisionModel = "qwen2.5vl:3b",  # screen vision model (~3 GB); keep in sync with [vision] model
+    [switch]$SkipVision,  # do not pull the vision model (look_at_screen then needs a manual ollama pull)
+    [switch]$Webcam  # also install OpenCV for the optional webcam tool (still off until [vision] webcam_enabled)
 )
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
@@ -29,6 +32,11 @@ if ($Parakeet) {
     & $Py -m pip install "onnx-asr[gpu,hub]"
 }
 
+if ($Webcam) {
+    Write-Host "==> Installing OpenCV (webcam tool)"
+    & $Py -m pip install -e ".[webcam]"
+}
+
 Write-Host "==> Downloading wake word models"
 & $Py -c "import openwakeword; openwakeword.utils.download_models(['hey_jarvis'])"
 
@@ -42,6 +50,17 @@ if (Get-Command ollama -ErrorAction SilentlyContinue) {
     ollama pull $Model
 } else {
     Write-Warning "Ollama not found. Install it from https://ollama.com/download, then run: ollama pull $Model"
+}
+
+if (-not $SkipVision) {
+    # Pulled by default: "what's on my screen" needs it. The small 3b model fits next to qwen3:14b + Whisper;
+    # it unloads 2 minutes after use ([vision] keep_alive).
+    Write-Host "==> Pulling Ollama vision model $VisionModel"
+    if (Get-Command ollama -ErrorAction SilentlyContinue) {
+        ollama pull $VisionModel
+    } else {
+        Write-Warning "Ollama not found. After installing it run: ollama pull $VisionModel"
+    }
 }
 
 Write-Host "==> Setting Ollama speed options (user environment variables)"

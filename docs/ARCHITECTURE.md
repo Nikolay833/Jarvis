@@ -53,7 +53,8 @@ jarvis/                 Python package (the core)
   paths.py              Path resolution (~, env vars, Desktop/Documents/... incl. OneDrive-redirected)
   claude_sessions.py    Claude Code sessions from ~/.claude/projects transcripts (parse, project resolve, rank)
   claude_watch.py       Hook events -> spoken announcements (throttle, pending permission)
-  claude_hook.py        Stdlib-only Claude Code hook: forwards Stop/Notification to the bus
+  claude_hook.py        Stdlib-only Claude Code hook: forwards Stop/Notification/PostToolUse to the bus; blocking PermissionRequest round trip
+  claude_progress.py    Tool-call records (transcript + hook events) -> progress/change sentences, test outcome parsing, git numstat
   store.py              %APPDATA%/Jarvis JSON files (atomic writes) and state.json
   memory.py             Long-term facts about the user, dedupe, relevance, "[Known about the user: ...]" block
   timeparse.py          Natural durations and times ("in 20 minutes", "tomorrow at 9")
@@ -63,7 +64,7 @@ jarvis/                 Python package (the core)
   extras.py             Glue: memory block into the agent, scheduler start, automatic briefing hook
   tools/                Tool registry + tools (system, files, apps, windows, chrome, spotify, claude_code,
                         claude_history, claude_chat, claude_sessions_tools, claude_terminal, memory_tools,
-                        reminder_tools, briefing_tool, maps_tools)
+                        reminder_tools, briefing_tool, maps_tools, vision)
 scripts/                setup_windows.ps1, start_jarvis.ps1, install_claude_hooks.py
 tests/                  pytest, no hardware or network needed
 orb/                    Tauri v2 overlay app
@@ -84,9 +85,11 @@ Core to orb:
 | `reply` | `text` | Jarvis reply sentence (shown as one caption line). |
 | `confirm` | `id`, `summary` | Risky action waiting for approval. |
 | `confirm_resolved` | `id`, `approved`: bool | Approval answered (by voice or click). |
+| `claude_permission_result` | `id` (the request's), `decision`: `allow`/`deny`/`ask` | Answer to a `claude_permission` request; the hook filters by `id`. `ask` = no decision. |
 | `job` | `id`, `kind`, `status`: `running` \| `done` \| `failed`, `summary` | Background job update (Claude Code runs). |
 | `map_show` | `origin`: `{lat, lon, label, accuracy, source: windows\|home\|ip}` or null, `destination`: `{lat, lon, label}`, `routes`: `[{mode: car\|walk, distance_m, duration_s, geometry: GeoJSON LineString [lon,lat], steps: [{text, distance_m}]}]`, `transit_url` ("" = no card), `focus`: `car\|walk\|transit\|""` | Open the map overlay. `routes` empty = just a place; `destination.bbox` [south, north, west, east] sets the zoom. |
 | `map_control` | `action`: `zoom_in`\|`zoom_out` (+`amount` levels), `pan` (+`direction` north\|south\|east\|west, `amount` half-screens), `reset` | Move the open map (tool `map_control`). Zoom to a place and "centre on me" send `map_show` instead. |
+| `vision` | `active`: bool, `source`: `screen` \| `webcam` | A capture + vision-model call is running (tools `look_at_screen`, `read_screen_text`, `look_through_webcam`). The orb may ignore it; `webcam` is the privacy-relevant one. |
 | `map_hide` | none | Close the map window (also echoed by the core after `map_closed`, so the orb window learns the map is gone). |
 
 Orb to core:
@@ -98,7 +101,8 @@ Orb to core:
 | `activate` | none | Hotkey/click: start listening without wake word. |
 | `map_closed` | none | The map window closed itself (Esc or Close button). |
 | `map_open_transit` | none | "Open in Google Maps" button: the core opens the last transit URL in the default browser. |
-| `claude_event` | `event` (`Stop`/`Notification`), `session_id`, `cwd`, `notification_type`, `message`, `last_assistant_message`, `transcript_path` | From `jarvis.claude_hook` (any local client): Jarvis announces it. |
+| `claude_event` | `event` (`Stop`/`Notification`/`PostToolUse`/`PostToolUseFailure`), `session_id`, `cwd`, `notification_type`, `message`, `last_assistant_message`, `transcript_path`; tool events add `tool_name`, `file_path`, `command`, `tool_result` (tail, 1500 chars), `is_error` | From `jarvis.claude_hook` (any local client): Jarvis announces it / records it for progress. |
+| `claude_permission` | `id`, `timeout`, `session_id`, `cwd`, `tool_name`, `tool_input` (`command`/`file_path`/`url`) | From the PermissionRequest hook, which then waits for the matching result. Jarvis asks by voice (Confirmer). |
 
 ## Audio flow and feedback
 
@@ -288,9 +292,10 @@ Starting a run counts as `risky` (it edits files), so it needs approval.
 
 ### Hooks: Jarvis speaks when Claude finishes or needs you
 
-`scripts/install_claude_hooks.py` merges into `~/.claude/settings.json` a `Stop` hook and `Notification` hooks
-(one entry each for `permission_prompt`, `agent_needs_input`, `elicitation_dialog`) running
-`"<repo>\.venv\Scripts\python.exe" -m jarvis.claude_hook` (timeout 10). It writes a timestamped backup first,
+`scripts/install_claude_hooks.py` merges into `~/.claude/settings.json` a `Stop` hook, `Notification` hooks
+(one entry each for `permission_prompt`, `agent_needs_input`, `elicitation_dialog`), `PostToolUse` and
+`PostToolUseFailure` hooks (matcher `Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit`) and a `PermissionRequest`
+hook (timeout 60), all running `"<repo>\.venv\Scripts\python.exe" -m jarvis.claude_hook` (timeout 10 unless noted). It writes a timestamped backup first,
 replaces older Jarvis entries (idempotent), leaves all other settings and hooks alone; `--uninstall` removes only
 its entries; `--settings` and `--python` override the paths. `setup_windows.ps1` runs it.
 
@@ -305,7 +310,29 @@ from a Stop hook would block Claude). Nothing is sent when `JARVIS_HEADLESS=1`.
 throttled for 30 s. Spoken through `announce()`, which waits for the current turn. Config `[claude_watch]`:
 `enabled`, `announce_finish`, `announce_permission`, `min_turn_seconds` (a "finished" announcement needs the turn
 to have lasted that long, measured from the last real user message timestamp in the transcript to now; if
-unavailable it announces anyway).
+unavailable it announces anyway), `voice_approval`.
+
+### Supervisor: progress, changes, voice approval
+
+`claude_progress.py` folds tool calls into `ToolRec`s from two sources: the transcript (`tool_use` + matching
+`tool_result` blocks; the turn starts at the last real user message) and live `PostToolUse`/`PostToolUseFailure`
+events kept per session in `ClaudeWatch.live` until the next Stop. `summarize` -> files edited/created (Edit, Write,
+MultiEdit, NotebookEdit `file_path`), shell commands, test runs (`is_test_command`: pytest, npm/yarn/pnpm test,
+cargo test, go test, jest, vitest, ...; `test_outcome` parses the result text, failure wins, a failed tool result
+with no recognisable text counts as failing), the running tool and elapsed time. The Stop announcement uses the live
+records (transcript as fallback, which may lag): "Sir, Claude has finished in <project>: three files changed, tests
+passing. He says: <first sentence>." Tools `claude_progress` and `claude_changes` (claude_sessions_tools.py; fast paths
+"how's Claude doing", "Claude progress", "what has Claude changed") read the transcript; `claude_changes` adds a
+read-only `git diff HEAD --numstat` restricted to the files Claude touched (untracked new files count as added).
+
+Voice approval: the `PermissionRequest` hook sends `claude_permission` and blocks up to 45 s for
+`claude_permission_result` with the same `id` (it answers WebSocket pings meanwhile). `Assistant.on_claude_permission`
+(one question at a time) -> `ClaudeWatch.decide_permission` -> `Confirmer.ask(summary, prompt=..., timeout_none=True)`:
+"Sir, Claude wants to run npm install in Jarvis. Shall I allow it?"; commands matching `safety.classify_shell`
+(rm -rf, git push --force, curl | sh, ...) add "Careful: it deletes files for good." Yes -> the hook prints
+`{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}`, no -> `deny`.
+Timeout, no Jarvis, `voice_approval = false`, `JARVIS_HEADLESS=1` or any error -> no output, so Claude shows its own
+prompt. While a question is in flight the "needs your permission" Notification announcement is suppressed.
 
 ## Maps and directions
 
@@ -345,3 +372,30 @@ and `where_am_i` complete the set; "close the map" and "where am I" are fast pat
   relative URL, which a bundle would break).
 - Errors are spoken: offline gives "I can't reach the map services right now. Please check the internet connection."
 - Config `[maps]`: `home_address`, `work_address`, `default_city`, `geocoder_url`, `routing_url`, `show_transit_link`.
+
+## Computer vision
+
+`tools/vision.py`: `look_at_screen(question, monitor)`, `read_screen_text()` and the optional
+`look_through_webcam(question)`.
+
+- Capture: `mss` if installed, else `PIL.ImageGrab` (Windows, main monitor only). `monitor` 0 = main, 1 = next.
+  When the question names the current window ("this error", "this window", "this page") the foreground
+  window rect (ctypes `GetForegroundWindow` + DWM frame bounds) is captured instead of the whole screen.
+- The image is scaled down to `[vision] max_side` (default 1280, never up), sent as a base64 JPEG in `images` of
+  one Ollama `/api/chat` call (`stream: false`, `keep_alive` from `[vision]`) to a small VLM. The answer is cleaned
+  of markdown and `<think>` text, cut at a sentence end near 1200 chars, and spoken as given.
+- Prompts: question prompt (1-3 spoken sentences, read errors verbatim), describe prompt (no question),
+  transcription prompt (`read_screen_text`).
+- **VRAM**: qwen3:14b (~10 GB, kept loaded) + Whisper large-v3 (~3.5 GB) leave about 2.5 GB, so the default vision
+  model is `qwen2.5vl:3b` (~3 GB); the 7b does not fit. Alternatives: `gemma3:4b`, `llava-phi3`. With
+  `keep_alive = "2m"` it unloads shortly after use. If Ollama must evict qwen3 to load it, that is accepted (logged
+  as "vision request ..."); the next normal turn reloads qwen3 (several seconds). The first vision call also loads
+  the vision model, so expect several seconds; the agent says "One moment, sir." first (`SLOW_TOOL_NOTICE`, and a
+  spoken notice for the fast path).
+- Routing: static prompt rules send "what's on my screen / read this error / summarise this page" to
+  `look_at_screen`; fast paths (`fastpath._SCREEN`, `_READ_SCREEN`) do the same without the LLM, passing the
+  utterance as `question`.
+- Webcam: off unless `[vision] webcam_enabled = true` (and `pip install -e ".[webcam]"` for OpenCV). Never automatic:
+  only the tool, only on an explicit request ("look at me", "through the camera"); the prompt forbids using it for
+  the screen. Each use logs a WARNING line, grabs one frame (a few warm-up reads for exposure), releases the camera
+  and emits the `vision` event (`active` true then false). Disabled, the tool returns a plain error.

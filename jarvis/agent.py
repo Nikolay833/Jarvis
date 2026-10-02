@@ -38,9 +38,10 @@ For coding work in a project folder, use claude_code_run. For simple PC question
 When the user asks you to do something on the PC, call the tool in this same response; never say you will do it later. Only reply in text after the tool results arrive, reporting what actually happened.
 To read out the last messages of a Claude conversation word for word, use claude_code_history. To make folders or files, use create_folder and write_file. To find files or folders on the PC, use find_on_pc (where "~" for the whole user folder, or desktop/documents/downloads) and speak its answer without reading full paths aloud; if the user says "search for X" without saying web or PC, ask which they mean.
 For music use music_control (pause, resume, next, previous, stop), spotify_now_playing and spotify_play; for windows use window_action (minimize, maximize, restore, focus, close) and minimize_all; for Chrome profiles or searching in Chrome use open_chrome (chrome_profiles lists profiles).
-Only use Claude tools when the user mentions Claude or a Claude session; a bare "open X" means an app, folder or file, and if X is unclear ask what to open. Claude Code sessions: to open or resume an existing session ("open the login bug session in Jarvis") use claude_open_session(topic, project); for "my last/latest Claude session" pass topic "latest"; if it returns a question listing sessions, say it exactly as given, and after the user answers call it again with choice=N. "Continue where I left off in X" -> claude_continue. "New Claude session for X" or "ask Claude to do X in project Y" -> claude_new_session (the task goes in prompt). "What did Claude say", "what is Claude doing", "is Claude done", "did Claude finish" -> claude_status (never claude_code_status, which only covers jobs Jarvis started). "List my Claude sessions" -> claude_sessions. "Ask that session X and tell me the answer" -> claude_ask_session (only when the answer should be spoken; otherwise open the session). Confirm in one short, natural sentence, e.g. "Opening the login bug session now."
+Only use Claude tools when the user mentions Claude or a Claude session; a bare "open X" means an app, folder or file, and if X is unclear ask what to open. Claude Code sessions: to open or resume an existing session ("open the login bug session in Jarvis") use claude_open_session(topic, project); for "my last/latest Claude session" pass topic "latest"; if it returns a question listing sessions, say it exactly as given, and after the user answers call it again with choice=N. "Continue where I left off in X" -> claude_continue. "New Claude session for X" or "ask Claude to do X in project Y" -> claude_new_session (the task goes in prompt). "What did Claude say", "what is Claude doing", "is Claude done", "did Claude finish" -> claude_status (never claude_code_status, which only covers jobs Jarvis started). "How is Claude doing", "Claude progress", "how long has Claude been at it" -> claude_progress (files edited, tests, current activity); "what has Claude changed", "which files did Claude touch" -> claude_changes (files plus git diff summary); read either answer out as given. "List my Claude sessions" -> claude_sessions. "Ask that session X and tell me the answer" -> claude_ask_session (only when the answer should be spoken; otherwise open the session). Confirm in one short, natural sentence, e.g. "Opening the login bug session now."
 For a plain "ask Claude" or "tell Claude" request with no project or session, use claude_terminal (opens a visible terminal running Claude with the request), then say in one short sentence that Claude is on it. Only if the user explicitly wants you to read Claude's answer back, use claude_chat instead and relay the answer faithfully; claude_chat_list and claude_chat_history manage those chats. claude_code_run is for silent background coding jobs.
 Maps: "I want to go to X", "how do I get to X", "directions to X", "navigate to X", "take me to X" -> directions(destination=X) (mode "all" unless they ask only for car, walking or transit; "home" and "work" are saved places); it shows a full-screen map with car and walking routes and a Google Maps public transport link, then say its text as given. "Show me X on the map", "show me London" or "where is X" -> show_on_map (it zooms in on the place). Any request to zoom, move, centre or reset the map ("zoom in", "zoom out", "zoom in on London", "move the map north", "centre on me", "reset the map") -> map_control(action, place); never say you moved or zoomed the map without calling map_control or show_on_map. "Open the transit route in Google Maps" -> open_transit_directions. "Close the map" -> close_map. "Where am I" -> where_am_i. Free routing has no live timetables, so never invent bus or metro times.
+Vision: "what's on my screen", "what am I looking at", "read this error", "what does this error say", "summarise this page", "what is this window" -> look_at_screen(question = the user's words); "read this to me", "read the screen" -> read_screen_text. Say the answer as given, in your own voice, without adding details you were not given. Use look_through_webcam only when the user explicitly asks you to look at them or through the camera ("look at me", "what do you see through the camera"); never for the screen, never on your own. If it says the camera is switched off, tell the user plainly.
 After using tools, report the outcome in one short sentence. If a tool fails, say so plainly and suggest the next step."""
 
 NUDGE = "(system) You announced an action but did not call a tool. Call the appropriate tool now. Do not reply with text only."
@@ -56,7 +57,9 @@ CLAUDE_GUARD_MSG = ("Not done: the user did not mention Claude, so do not open o
                     "Ask the user in one short sentence what they want, e.g. 'Open what, sir?'")
 
 SLOW_TOOL_NOTICE = {"claude_chat": "Asking Claude, sir.", "claude_chat_new": "Asking Claude, sir.",
-                    "claude_ask_session": "Asking that session, sir."}
+                    "claude_ask_session": "Asking that session, sir.",
+                    "look_at_screen": "One moment, sir.", "read_screen_text": "One moment, sir.",
+                    "look_through_webcam": "One moment, sir."}
 
 _LEAD = r"(?:(?:very well|certainly|of course|right|sure|ok(?:ay)?|alright|understood|absolutely|splendid)[,.!]?\s+)?(?:sir[,.!]?\s+)?"
 _ANNOUNCE = re.compile(
@@ -86,7 +89,7 @@ def full_system_prompt() -> str:
         return SYSTEM_PROMPT
 
 _YES = {"yes", "yeah", "yep", "yup", "sure", "proceed", "approve", "approved", "confirm", "confirmed",
-        "affirmative", "ok", "okay", "absolutely", "certainly", "correct", "accept", "accepted"}
+        "affirmative", "ok", "okay", "absolutely", "certainly", "correct", "accept", "accepted", "allow", "allowed"}
 _YES_PHRASES = ("go ahead", "do it", "go for it", "of course", "carry on", "make it so", "sounds good")
 _NO = {"no", "nope", "nah", "stop", "cancel", "deny", "denied", "negative", "don't", "dont", "abort", "never",
        "not", "wait", "reject", "rejected", "decline", "declined"}
@@ -150,7 +153,9 @@ class Confirmer:
             elif text:
                 await self.speak("Sorry sir, was that a yes or a no?")
 
-    async def ask(self, summary: str) -> bool:
+    async def ask(self, summary: str, prompt: str | None = None, timeout_none: bool = False) -> bool | None:
+        """Ask by voice and bus. `prompt` replaces the default spoken question; with `timeout_none` an
+        unanswered question returns None instead of False."""
         cid = uuid.uuid4().hex[:8]
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[bool] = loop.create_future()
@@ -158,13 +163,13 @@ class Confirmer:
         await self.bus.emit("confirm", id=cid, summary=summary)
         voice_task: asyncio.Task | None = None
         try:
-            await self.speak(f"Sir, I'm about to {summary}. Shall I proceed? Say yes or no.")
+            await self.speak(prompt or f"Sir, I'm about to {summary}. Shall I proceed? Say yes or no.")
             if self.listen is not None and not fut.done():
                 voice_task = asyncio.create_task(self._voice_loop(fut))
             try:
                 approved = await asyncio.wait_for(asyncio.shield(fut), self.timeout)
             except asyncio.TimeoutError:
-                approved = False
+                approved = None if timeout_none else False
         finally:
             if voice_task:
                 voice_task.cancel()
@@ -172,7 +177,7 @@ class Confirmer:
             self._pending.pop(cid, None)
             if not fut.done():
                 fut.cancel()
-        await self.bus.emit("confirm_resolved", id=cid, approved=approved)
+        await self.bus.emit("confirm_resolved", id=cid, approved=bool(approved))
         return approved
 
 

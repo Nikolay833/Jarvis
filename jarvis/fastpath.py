@@ -113,7 +113,33 @@ _CLAUDE_STATUS = re.compile(
     r"|(?:is|did|has) claude (?:done|finish|finished|finish(?:ed)? (?:yet|working)|done yet)"
     r"|(?:tell me |read me )?(?:what )?claude(?:'s| last)? (?:said|answer|reply|last message))"
     r"(?P<rest>.*)$")
+# "how's Claude doing", "Claude progress", "what has Claude changed", "which files did Claude touch"
+_CLAUDE_PROGRESS = re.compile(
+    r"^(?:(?:how is|hows|how's|how are) (?:claude|things with claude)(?: getting on| going| progressing)?(?: doing)?"
+    r"|(?:how is|hows|how's) claude(?: doing| getting on| going)"
+    r"|(?:give me |show me )?(?:a )?claude(?:'s)? (?:progress|status report|progress report)"
+    r"|(?:what is|whats|what's) claude'?s? progress"
+    r"|(?:how far (?:along )?is claude)"
+    r"|(?:how long has claude been (?:at it|working|going)))"
+    r"(?P<rest>(?: (?:in|on|for|from|with|at)\b.*)?)$")
+_CLAUDE_CHANGES = re.compile(
+    r"^(?:(?:what|which files?)\b.*\bclaude\b.*\b(?:changed|change|edited|edit|touch|touched|modified|modify|altered)"
+    r"|(?:what|which)\b.*\bchanges? (?:has |did |have )?claude\b.*(?:made|make)"
+    r"|(?:show me |give me )?(?:a )?(?:claude(?:'s)? )?(?:change summary|summary of (?:claude'?s? )?changes))"
+    r"(?P<rest>.*)$")
 _PROJECT_IN = re.compile(r"\b(?:in|on|for|from|with) (?:the |my )?(?P<project>[a-z0-9][a-z0-9 ._-]*?)(?: project| session| folder)?$")
+
+# "what's on my screen", "read my screen", "what does this error say" -> look_at_screen with the words as question
+_SCREEN = re.compile(
+    rf"^{_POLITE}(?:(?:what(?:'s| is|s) (?:on|in) (?:my |the )?screen(?: right now| now)?"
+    r"|what(?:'s| is|s) on my (?:display|monitor)"
+    r"|what am i (?:looking at|viewing)(?: right now| now)?"
+    r"|(?:tell me )?what do you see on (?:my|the) screen"
+    r"|(?:look at|check|see|describe) (?:my |the )?screen"
+    r"|what does (?:this|that|the) (?:error|message|warning|popup|dialog)(?: message)? say"
+    r"|(?:read|explain) (?:me )?(?:this|that|the) (?:error|error message|warning|message))"
+    r")$")
+_READ_SCREEN = re.compile(rf"^{_POLITE}read (?:me )?(?:my |the )?(?:screen|display)(?: to me| out loud| aloud)?$")
 
 _SEARCH_OTHER_SITE = re.compile(r" (?:on|in|at) (?:youtube|amazon|ebay|reddit|github|wikipedia|twitter|netflix|"
                                 r"spotify|maps|google maps|facebook|instagram|linkedin|bing)$")
@@ -332,8 +358,19 @@ def match(text: str, now: datetime | None = None) -> FastPath | None:
         song = m.group(1).strip()
         return FastPath("music", f"Playing {song} on Spotify, sir.", _call("spotify_play", query=song),
                         speak_result=True)
+    if _READ_SCREEN.match(t):
+        return FastPath("vision", "One moment, sir.", _call("read_screen_text"), speak_result=True)
+    if _SCREEN.match(t):
+        return FastPath("vision", "One moment, sir.", _call("look_at_screen", question=_clean_original(text)),
+                        speak_result=True)
     if _OPEN_WHAT.match(t):
         return FastPath("clarify", "Open what, sir?")
+    for rx, tool_name in ((_CLAUDE_PROGRESS, "claude_progress"), (_CLAUDE_CHANGES, "claude_changes")):
+        m = rx.match(t)
+        if m:
+            pm = _PROJECT_IN.search(m.group("rest") or "")
+            project = pm.group("project").strip() if pm else ""
+            return FastPath(tool_name, "Let me check, sir.", _call(tool_name, project=project), speak_result=True)
     m = _CLAUDE_STATUS.match(t)
     if m:
         pm = _PROJECT_IN.search(m.group("rest") or "")

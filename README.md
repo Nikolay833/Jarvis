@@ -100,6 +100,14 @@ Audition presets with `python -m jarvis.voices` (`--save DIR` writes wavs;
   `.venv\Scripts\python scripts\install_claude_hooks.py` and remove them with `... --uninstall`. They edit
   `~/.claude/settings.json` (a timestamped backup is written first) and only send events to the local Jarvis.
   Tune in `[claude_watch]` in `config.toml` (`min_turn_seconds` skips short turns).
+- Claude supervisor: "how's Claude doing?" / "Claude progress" -> "Claude has been at it for 6 minutes in Jarvis: four
+  files edited, tests ran twice, last run passing. He's currently editing map.ts." "What has Claude changed?" ->
+  files from the transcript plus a read-only `git diff` line count. The "finished" announcement carries the same
+  numbers ("3 files changed, tests passing"). When Claude asks for permission Jarvis asks aloud ("Sir, Claude wants
+  to run npm install in Jarvis. Shall I allow it?", with an extra warning for things like `rm -rf`); say yes or no
+  (or click the orb buttons). No answer in 30 s, Jarvis not running, or anything going wrong = Claude shows its
+  normal on-screen prompt; nothing is ever approved automatically. Turn it off with `voice_approval = false` in
+  `[claude_watch]`. Re-run `install_claude_hooks.py` once to add the new hooks.
 - Memory: "remember that my main project is Jarvis", "what do you remember", "forget my favourite colour". Jarvis also
   saves lasting preferences you state clearly ("I prefer Spotify", "call me Nikolay") and says so; he never stores
   passwords or keys. Facts live in `%APPDATA%\Jarvis\memory.json` (edit or delete it freely) and the relevant ones
@@ -117,6 +125,16 @@ Audition presets with `python -m jarvis.voices` (`--save DIR` writes wavs;
   Privacy & security > Location, including "Let desktop apps access your location"), then the saved home address
   (`[maps] home_address` or "remember that home is ..."), then your IP (city level). Data: OpenStreetMap
   (Nominatim, FOSSGIS OSRM) and CARTO basemap tiles; needs internet. See `orb/README.md`.
+
+## Vision
+
+"What's on my screen", "what does this error say", "summarise this page" and "read my screen" take a screenshot
+and ask a small local vision model (`[vision] model`, default `qwen2.5vl:3b`, pulled by `setup_windows.ps1`;
+skip with `-SkipVision`). VRAM note: qwen3:14b plus Whisper leave about 2.5 GB on a 16 GB card, so the 3b model is
+the default (the 7b does not fit); it unloads 2 minutes after use (`keep_alive`), so the first request takes a few
+seconds. Alternatives: `gemma3:4b`, `llava-phi3`. Optional webcam ("look at me", "what do you see through the
+camera"): off by default; set `webcam_enabled = true` and `pip install -e ".[webcam]"` (or
+`setup_windows.ps1 -Webcam`). It only runs when you ask, and each use is logged.
 
 ## Safety
 

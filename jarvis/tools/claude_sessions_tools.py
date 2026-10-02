@@ -10,6 +10,7 @@ import re
 import time
 from pathlib import Path
 
+from .. import claude_progress as cp
 from .. import claude_sessions as cs
 from ..claude_watch import watch
 from . import claude_chat
@@ -203,6 +204,54 @@ def claude_status(project: str = "", topic: str = "") -> str:
     if pend is not None and pend.message:
         parts.append(f"Permission request: {cs.speakable(pend.message)[:200]}")
     return "\n".join(parts)
+
+
+def _one_session(project: str, topic: str) -> cs.Session:
+    sessions = cs.scan_sessions()
+    _project_folder(project, sessions)
+    ranked = cs.find_sessions(topic, project or None, limit=1, sessions=sessions)
+    if not ranked:
+        raise ToolError("I found no Claude session to report on")
+    return ranked[0].session
+
+
+@tool("Spoken progress report on what Claude Code is doing right now in a session: how long it has been at it, "
+      "files edited, shell commands, test runs and whether they pass, and what it is working on this moment. "
+      "Use for 'how is Claude doing', 'Claude progress', 'what is Claude up to'.")
+def claude_progress(project: str = "", topic: str = "") -> str:
+    """Progress of the current turn of a Claude session.
+
+    Args:
+        project: Project name or folder. Empty means any project.
+        topic: What the session is about. Empty means the most recently active one.
+    """
+    s = _one_session(project, topic)
+    now = time.time()
+    recs, turn_ts = cp.turn_records(s.path)
+    live = watch.live_records(s.id)
+    if not recs:
+        recs = live
+    busy = cs.looks_busy(s, now) or any((r.ts or 0) > now - 60 for r in live[-1:])
+    text = cp.progress_sentence(cp.summarize(recs, turn_ts or s.last_user_ts), s.project_name, busy, now)
+    if watch.pending_for(s.id) is not None:
+        text += " He is waiting for your permission."
+    return text
+
+
+@tool("Summarise what Claude Code changed in a session: the files edited or created, and (for a git repository) "
+      "how many lines were added and removed. Use for 'what has Claude changed', 'which files did Claude touch'.")
+def claude_changes(project: str = "", topic: str = "") -> str:
+    """Files changed by a Claude session, with a read-only git diff summary.
+
+    Args:
+        project: Project name or folder. Empty means any project.
+        topic: What the session is about. Empty means the most recently active one.
+    """
+    s = _one_session(project, topic)
+    recs, _idx, _ts = cp.read_transcript(s.path)
+    files = cp.changed_files(recs or watch.live_records(s.id))
+    stat = cp.git_numstat(s.project_dir, files) if Path(s.project_dir).is_dir() else None
+    return cp.changes_sentence(files, stat, s.project_name)
 
 
 @tool("Ask an existing Claude session a question in the background and read its answer back. Use ONLY when the "

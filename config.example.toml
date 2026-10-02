@@ -90,6 +90,8 @@ enabled = true
 announce_finish = true      # "Sir, Claude finished in <project>: ..."
 announce_permission = true  # "Sir, Claude needs your permission in <project>."
 min_turn_seconds = 20.0     # only announce "finished" if the turn took at least this long (seconds)
+voice_approval = true      # "Sir, Claude wants to run npm install in X. Shall I allow it?" yes/no by voice;
+                            # no answer in time = Claude asks on screen as usual. Never auto-allows.
 
 [memory]
 enabled = true           # "remember that ...", "what do you remember", "forget ...": facts live in %APPDATA%\Jarvis\memory.json
@@ -132,3 +134,15 @@ show_transit_link = true # "Public transport" card opening Google Maps
 [files]
 # Optional. If non-empty, file tools only work inside these folders.
 allowed_roots = []       # e.g. ["C:/Users/you/Documents", "D:/Projects"]
+
+[vision]
+# "What's on my screen", "read this error": a screenshot goes to a small local vision model via Ollama.
+# qwen2.5vl:3b (~3 GB) fits beside qwen3:14b + Whisper on 16 GB; the 7b does not. Pull it: ollama pull qwen2.5vl:3b
+model = "qwen2.5vl:3b"  # alternatives: gemma3:4b, llava-phi3
+url = ""                 # empty = use [ollama] url
+keep_alive = "2m"        # unload after use so qwen3 keeps its VRAM; the next call reloads it (a few seconds)
+max_side = 1280          # screenshots are scaled down to this longest side
+timeout = 90.0           # seconds; the first call also loads the model
+max_reply_tokens = 400
+webcam_enabled = false   # camera tool ("look at me"); off by default, needs: pip install -e ".[webcam]"
+webcam_index = 0

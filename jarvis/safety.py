@@ -67,6 +67,37 @@ def classify_powershell(command: str) -> Assessment:
     return Assessment(SAFE)
 
 
+# Shell commands run by Claude Code (bash / cmd / PowerShell). Used only to add a spoken warning.
+_SHELL_RISKY: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(p, _I), r)
+    for p, r in [
+        (r"(?<![\w-])rm\s+(?:-\w*\s+)*-\w*[rf]|(?<![\w-])rm\s+--(?:recursive|force)", "it deletes files for good"),
+        (r"(?<![\w-])(?:del|erase)\s+.*(?:/s|/q)\b|(?<![\w-])(?:rd|rmdir)\s+.*/s\b", "it deletes files for good"),
+        (r"\bRemove-Item\b.*-Recurse", "it deletes files for good"),
+        (r"\bgit\s+push\b.*(?:--force\b|--force-with-lease|\s-f\b)", "it force-pushes to a remote"),
+        (r"\bgit\s+reset\s+--hard\b|\bgit\s+clean\s+-\w*f|\bgit\s+checkout\s+--\s|\bgit\s+branch\s+-D\b",
+         "it discards work in git"),
+        (r"(?<![\w-])format(?:\.com)?\s+[a-z]:|\bmkfs\b|\bdiskpart\b|\bdd\s+if=", "it formats or overwrites a disk"),
+        (r"(?:curl|wget|iwr|irm|Invoke-WebRequest)\b[^|;]*\|\s*(?:sudo\s+)?(?:sh|bash|zsh|python3?|iex|Invoke-Expression)\b",
+         "it downloads and runs code"),
+        (r"\bsudo\b", "it runs with elevated rights"),
+        (r"\bchmod\s+-R\s+0?777\b|\bchown\s+-R\b", "it changes permissions recursively"),
+        (r"\b(?:shutdown|reboot|halt|poweroff)\b", "it shuts the machine down"),
+        (r"\bdrop\s+(?:table|database)\b|\btruncate\s+table\b", "it destroys database data"),
+        (r"\breg(?:\.exe)?\s+(?:add|delete)\b|\bSet-ExecutionPolicy\b", "it changes system settings"),
+        (r">\s*/dev/(?:sd|nvme|disk)", "it overwrites a disk"),
+    ]
+]
+
+
+def classify_shell(command: str) -> Assessment:
+    """Risk of a shell command Claude Code wants to run (rm -rf, git push --force, curl | sh, ...)."""
+    for pattern, reason in _SHELL_RISKY:
+        if pattern.search(command or ""):
+            return Assessment(RISKY, reason)
+    return Assessment(SAFE)
+
+
 def classify_call(name: str, args: dict[str, Any], base_risk: str = SAFE) -> Assessment:
     """Final risk of one tool call: the tool's base risk, raised by its arguments."""
     if base_risk == RISKY:

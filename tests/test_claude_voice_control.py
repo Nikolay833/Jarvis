@@ -265,13 +265,13 @@ def notif(ntype, sid="s1"):
 
 def test_watch_stop_announcement_first_sentence_25_words():
     w, _ = mkwatch()
-    assert w.handle(stop_msg()) == "Sir, Claude finished in Jarvis: Fixed the login bug."
+    assert w.handle(stop_msg()) == "Sir, Claude has finished in Jarvis. He says: Fixed the login bug."
     w2, _ = mkwatch()
     long = " ".join(f"w{i}" for i in range(60)) + "."
     said = w2.handle(stop_msg(long))
-    assert said.split(": ", 1)[1].count("w") == 25 and said.endswith("...")
+    assert said.split("says: ", 1)[1].count("w") == 25 and said.endswith("...")
     w3, _ = mkwatch()
-    assert w3.handle(stop_msg("")) == "Sir, Claude finished in Jarvis."
+    assert w3.handle(stop_msg("")) == "Sir, Claude has finished in Jarvis."
 
 
 def test_watch_notifications():
@@ -354,7 +354,7 @@ def test_dispatch_bus_announces_claude_events(monkeypatch):
         watch.pending.clear()
 
     asyncio.run(go())
-    assert spoken == ["Sir, Claude finished in Jarvis: Fixed the login bug.",
+    assert spoken == ["Sir, Claude has finished in Jarvis. He says: Fixed the login bug.",
                       "Sir, Claude needs your permission in Jarvis."]
 
 
