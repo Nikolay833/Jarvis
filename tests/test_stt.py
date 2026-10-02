@@ -149,3 +149,23 @@ def test_bench_run_skips_failing_engine():
 
     res = stt_bench.run_bench([("c.wav", AUDIO)], [("ok", E), ("bad", boom)])
     assert [r[0] for r in res["c.wav"]] == ["ok"] and res["c.wav"][0][2] == "hi"
+
+
+def test_cuda_dll_dirs_finds_torch_and_nvidia_bins(tmp_path, monkeypatch):
+    import importlib.util
+    import types
+
+    from jarvis.audio import stt
+
+    (tmp_path / "torch" / "lib").mkdir(parents=True)
+    (tmp_path / "torch" / "__init__.py").write_text("")
+    (tmp_path / "nvidia" / "cublas" / "bin").mkdir(parents=True)
+    (tmp_path / "nvidia" / "cudnn" / "bin").mkdir(parents=True)
+    specs = {
+        "torch": types.SimpleNamespace(origin=str(tmp_path / "torch" / "__init__.py")),
+        "nvidia": types.SimpleNamespace(origin=None, submodule_search_locations=[str(tmp_path / "nvidia")]),
+    }
+    monkeypatch.setattr(importlib.util, "find_spec", lambda n, *a: specs.get(n))
+    dirs = stt.cuda_dll_dirs()
+    assert str(tmp_path / "torch" / "lib") in dirs
+    assert str(tmp_path / "nvidia" / "cublas" / "bin") in dirs and str(tmp_path / "nvidia" / "cudnn" / "bin") in dirs

@@ -6,8 +6,12 @@ the optional `onnx-asr` package). `make_transcriber(cfg)` picks one from `[stt] 
 
 from __future__ import annotations
 
+import importlib.util
 import inspect
 import logging
+import os
+import sys
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -17,6 +21,38 @@ log = logging.getLogger("jarvis.stt")
 ENGINES = ("whisper", "parakeet")
 PARAKEET_INSTALL = 'pip install "onnx-asr[gpu,hub]"'
 
+
+
+_cuda_dirs_added = False
+
+
+def cuda_dll_dirs() -> list[str]:
+    """Folders holding NVIDIA runtime DLLs (cuBLAS, cuDNN) that ship inside pip packages:
+    torch's own lib folder (the cu128 wheel bundles them) and any nvidia-*-cu12 wheels."""
+    dirs: list[str] = []
+    spec = importlib.util.find_spec("torch")
+    if spec and spec.origin:
+        dirs.append(str(Path(spec.origin).parent / "lib"))
+    spec = importlib.util.find_spec("nvidia")
+    for base in (spec.submodule_search_locations or []) if spec else []:
+        dirs += [str(p) for p in Path(base).glob("*/bin")]
+    return [d for d in dirs if Path(d).is_dir()]
+
+
+def ensure_cuda_dlls() -> None:
+    """Make cuBLAS/cuDNN findable on Windows. Without this, faster-whisper (ctranslate2) and
+    onnxruntime-gpu fail with 'cublas64_12.dll is not found' unless torch happened to load first."""
+    global _cuda_dirs_added
+    if _cuda_dirs_added or sys.platform != "win32":
+        return
+    _cuda_dirs_added = True
+    for d in cuda_dll_dirs():
+        try:
+            os.add_dll_directory(d)  # type: ignore[attr-defined]
+        except (OSError, AttributeError):
+            pass
+        os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
+        log.debug("cuda dll dir: %s", d)
 
 class Transcriber:
     """faster-whisper engine. Positional args kept compatible with the old signature."""
@@ -50,6 +86,7 @@ class Transcriber:
     def load(self) -> None:
         if self._model is not None:
             return
+        ensure_cuda_dlls()
         from faster_whisper import WhisperModel
 
         try:
@@ -112,6 +149,7 @@ class ParakeetTranscriber:
     def load(self) -> None:
         if self._model is not None:
             return
+        ensure_cuda_dlls()
         try:
             import onnx_asr
         except ImportError as exc:
