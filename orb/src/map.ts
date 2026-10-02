@@ -5,7 +5,7 @@ import "./map.css";
 import { Map as MapLibreMap, Marker, setWorkerUrl } from "maplibre-gl";
 import type { GeoJSONSource, LngLatBoundsLike } from "maplibre-gl";
 import { Bus } from "./bus";
-import { fmtCoords, fmtDistance, fmtDuration, fmtFrom } from "./format";
+import { fmtDistance, fmtDuration } from "./format";
 import { hudStyle, offlineStyle, STYLE_URL } from "./map-style";
 import type { CoreMessage, MapControl, MapRoute, MapShow } from "./protocol";
 import { setMapVisible } from "./tauri";
@@ -83,16 +83,6 @@ function ensureMap(): Promise<MapLibreMap> {
       if (m.isStyleLoaded()) return resolve();
       m.once("style.load", () => resolve());
       window.setTimeout(resolve, 8000);
-    });
-    let pending = false;
-    m.on("move", () => {
-      if (pending) return;
-      pending = true;
-      requestAnimationFrame(() => {
-        pending = false;
-        const c = m.getCenter();
-        $("coords").textContent = fmtCoords(c.lat, c.lng);
-      });
     });
     map = m;
     if (params.has("debug")) (window as unknown as { __map?: MapLibreMap }).__map = m; // for screenshots/tests
@@ -197,13 +187,11 @@ function animateRoutes(m: MapLibreMap, routes: MapRoute[]): void {
   drawRaf = requestAnimationFrame(step);
 }
 
-/** Space the panel and frame take, so the route/place is centered in the free part of the overlay. */
+/** Keep the route/place clear of the strip (bottom-left) and the faded edges. */
 function fitPadding(): { top: number; bottom: number; left: number; right: number } {
-  const wide = window.innerWidth >= 720;
-  const panel = $("panel").getBoundingClientRect();
-  const left = wide ? Math.round(panel.right + 28) : 40;
-  const bottom = wide ? Math.round(window.innerHeight * 0.17) : Math.round(window.innerHeight * 0.52) + 40;
-  return { top: Math.round(window.innerHeight * 0.2), bottom, left, right: Math.round(window.innerWidth * 0.14) };
+  const h = window.innerHeight;
+  const w = window.innerWidth;
+  return { top: Math.round(h * 0.2), bottom: Math.round(h * 0.3), left: Math.round(w * 0.14), right: Math.round(w * 0.14) };
 }
 
 function fit(m: MapLibreMap, msg: MapShow): void {
@@ -266,19 +254,18 @@ function control(c: MapControl): void {
   }
 }
 
-// ---- panel --------------------------------------------------------------------------------------------
+// ---- strip --------------------------------------------------------------------------------------
 function renderPanel(msg: MapShow): void {
   $("dest").textContent = msg.destination.label || "Destination";
-  const from = $("from");
-  if (msg.origin) from.textContent = fmtFrom(msg.origin.source, msg.origin.accuracy);
-  else from.textContent = fmtCoords(msg.destination.lat, msg.destination.lon);
+  $("dest").title = msg.destination.label;
+  $("note").hidden = msg.origin?.source !== "ip"; // only worth saying when the start point is a rough guess
 
   const modes = $("modes");
   modes.replaceChildren();
   for (const r of msg.routes) {
     const b = document.createElement("button");
     b.type = "button";
-    b.className = "mode";
+    b.className = "opt";
     b.dataset.mode = r.mode;
     b.setAttribute("role", "radio");
     b.innerHTML =
@@ -287,9 +274,10 @@ function renderPanel(msg: MapShow): void {
     b.addEventListener("click", () => select(r.mode));
     modes.append(b);
   }
-  modes.hidden = msg.routes.length === 0;
-  $("transit").hidden = !msg.transit_url;
-  $("cards").hidden = msg.routes.length === 0 && !msg.transit_url;
+  $("open-transit").hidden = !msg.transit_url;
+  $("row").hidden = msg.routes.length === 0 && !msg.transit_url;
+  $("steps-toggle").hidden = msg.routes.length === 0;
+  setSteps(false);
 
   const first = msg.routes.find((r) => r.mode === msg.focus) ?? msg.routes.find((r) => r.mode === "car") ?? msg.routes[0];
   if (first) select(first.mode);
@@ -298,7 +286,7 @@ function renderPanel(msg: MapShow): void {
 
 function select(mode: "car" | "walk"): void {
   selected = mode;
-  for (const b of document.querySelectorAll<HTMLButtonElement>("#modes .mode")) {
+  for (const b of document.querySelectorAll<HTMLButtonElement>("#modes .opt")) {
     const on = b.dataset.mode === mode;
     b.setAttribute("aria-checked", String(on));
     b.tabIndex = on ? 0 : -1;
@@ -310,15 +298,21 @@ function select(mode: "car" | "walk"): void {
 function renderSteps(r: MapRoute | null): void {
   const list = $("steps");
   list.replaceChildren();
-  $("steps-title").textContent = r ? (r.mode === "car" ? "Directions by Car" : "Directions on Foot") : "";
-  $("steps-title").hidden = list.hidden = !r;
   if (!r) return;
   r.steps.forEach((s) => {
     const li = document.createElement("li");
-    li.innerHTML = `<span class="txt">${esc(s.text)}</span><span class="dist">${s.distance_m > 0 ? esc(fmtDistance(s.distance_m)) : ""}</span>`;
+    li.innerHTML = `<span class="txt" title="${esc(s.text)}">${esc(s.text)}</span><span class="dist">${s.distance_m > 0 ? esc(fmtDistance(s.distance_m)) : ""}</span>`;
     list.append(li);
   });
   list.scrollTop = 0;
+}
+
+/** Steps are collapsed by default; the "Steps" text toggles them. */
+function setSteps(open: boolean): void {
+  $("steps").hidden = !open;
+  const t = $("steps-toggle");
+  t.setAttribute("aria-expanded", String(open));
+  t.textContent = open ? "Hide steps" : "Steps";
 }
 
 // ---- show / close -------------------------------------------------------------------------------------
@@ -332,8 +326,6 @@ async function show(msg: MapShow & { type?: string }): Promise<void> {
   if (!isOpen || current !== msg) return; // closed or replaced while the style was loading
   m.resize();
   clearOverlays(m);
-  const c = m.getCenter();
-  $("coords").textContent = fmtCoords(c.lat, c.lng);
 
   if (msg.origin && msg.origin.accuracy > 40 && msg.origin.accuracy < 20_000) {
     m.addSource("accuracy", { type: "geojson", data: circlePolygon(msg.origin.lat, msg.origin.lon, msg.origin.accuracy) });
@@ -380,6 +372,7 @@ window.addEventListener("keydown", (e) => {
     void close(true);
   }
 });
+$("steps-toggle").addEventListener("click", () => setSteps($("steps").hidden));
 $("open-transit").addEventListener("click", () => bus.send({ type: "map_open_transit" }));
 
 // roving radio group: arrows switch between Car and Walk
@@ -390,12 +383,7 @@ $("modes").addEventListener("keydown", (e) => {
   e.preventDefault();
   const next = modes[(modes.indexOf(selected) + 1) % modes.length];
   select(next);
-  document.querySelector<HTMLButtonElement>(`#modes .mode[data-mode="${next}"]`)?.focus();
+  document.querySelector<HTMLButtonElement>(`#modes .opt[data-mode="${next}"]`)?.focus();
 });
-
-const clock = $("clock");
-const tick = () => (clock.textContent = new Date().toLocaleTimeString([], { hour12: false }));
-tick();
-window.setInterval(tick, 1000);
 
 bus.start();
