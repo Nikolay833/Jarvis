@@ -19,7 +19,7 @@ from .tools.windows import _EXTRA_EXE
 
 @dataclass(frozen=True)
 class FastPath:
-    kind: str                       # time | date | day | open_app | lock | stop | volume | window | music | search
+    kind: str                       # time | date | day | open_app | lock | stop | volume | window | music | search | map
     reply: str                      # spoken reply ("" = say nothing)
     # for the caller to run: ("open_app", name) | ("lock_pc",) | ("volume", up|down|mute)
     # | ("call", tool_name, json_args) = run that registry tool
@@ -52,6 +52,8 @@ def _re(pattern: str) -> re.Pattern[str]:
 
 
 _NOW = r"(?: (?:right )?now)?"
+_CLOSE_MAP = _re(_POLITE + r"(?:close|hide|dismiss|exit|remove|get rid of)(?: the| this| my)? map(?: window| view| screen)?")
+_WHERE_AM_I = _re(_POLITE + r"(?:tell me )?(?:where (?:am i|i am)|what(?:'s| is|s) my (?:current )?location)" + _NOW)
 _TIME = _re(_POLITE + r"(?:tell me |give me )?(?:what(?:'s| is|s) )?the (?:current )?time" + _NOW
             + r"|" + _POLITE + r"what time is it" + _NOW
             + r"|current time")
@@ -284,6 +286,10 @@ def match(text: str, now: datetime | None = None) -> FastPath | None:
         return FastPath("day", f"It's {now.strftime('%A')}, sir.")
     if _DATE.match(t):
         return FastPath("date", f"Today is {format_date(now)}, sir.")
+    if _CLOSE_MAP.match(t):
+        return FastPath("map", "Closing the map, sir.", _call("close_map"))
+    if _WHERE_AM_I.match(t):
+        return FastPath("where_am_i", "Let me see, sir.", _call("where_am_i"), speak_result=True)
     fp = _match_assistant(text, now)
     if fp is not None:
         return fp

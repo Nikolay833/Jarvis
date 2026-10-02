@@ -154,6 +154,16 @@ class SpotifyConfig:
 
 
 @dataclass
+class MapsConfig:
+    home_address: str = ""  # "home" for directions and the fallback location; empty = a "home is ..." memory fact
+    work_address: str = ""  # "work" for directions; empty = a "work is ..." memory fact
+    default_city: str = "Sofia"  # retried with this appended when a place is not found
+    geocoder_url: str = "https://nominatim.openstreetmap.org"
+    routing_url: str = "https://routing.openstreetmap.de"
+    show_transit_link: bool = True  # Public transport card with a Google Maps link
+
+
+@dataclass
 class FilesConfig:
     allowed_roots: list[str] = field(default_factory=list)
 
@@ -176,6 +186,7 @@ class Config:
     reminders: RemindersConfig = field(default_factory=RemindersConfig)
     briefing: BriefingConfig = field(default_factory=BriefingConfig)
     spotify: SpotifyConfig = field(default_factory=SpotifyConfig)
+    maps: MapsConfig = field(default_factory=MapsConfig)
     files: FilesConfig = field(default_factory=FilesConfig)
     source: str = "defaults"
 

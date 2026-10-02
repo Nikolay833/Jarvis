@@ -20,3 +20,13 @@ export function onHotkey(cb: () => void): void {
   if (!inTauri) return;
   void listen("hotkey", cb);
 }
+
+/** Show/hide the full-screen map window (Rust hides the small orb window while the map is up). */
+export async function setMapVisible(visible: boolean): Promise<void> {
+  if (!inTauri) return;
+  try {
+    await invoke("set_map_visible", { visible });
+  } catch (e) {
+    console.warn("set_map_visible failed", e);
+  }
+}

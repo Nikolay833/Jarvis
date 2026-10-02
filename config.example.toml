@@ -118,6 +118,17 @@ include_claude = true    # Claude Code sessions active since yesterday
 client_id = ""
 client_secret = ""
 
+[maps]
+# "I want to go to X": full-screen map with car and walking routes plus a Google Maps public transport link.
+# Location order: Windows location services (Settings > Privacy & security > Location, incl. "Let desktop apps
+# access your location"), then the saved home address, then IP geolocation.
+home_address = ""        # e.g. "12 Vitosha Blvd, Sofia"; empty = use a remembered "home is ..." fact
+work_address = ""        # same for "take me to work"
+default_city = "Sofia"   # retried with this appended when a place is not found
+geocoder_url = "https://nominatim.openstreetmap.org"   # Nominatim, 1 request per second
+routing_url = "https://routing.openstreetmap.de"       # FOSSGIS OSRM (routed-car, routed-foot)
+show_transit_link = true # "Public transport" card opening Google Maps
+
 [files]
 # Optional. If non-empty, file tools only work inside these folders.
 allowed_roots = []       # e.g. ["C:/Users/you/Documents", "D:/Projects"]

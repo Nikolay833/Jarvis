@@ -25,15 +25,32 @@
         "resizable": false,
         "focus": false,
         "visible": false
+      },
+      {
+        "label": "map",
+        "title": "Jarvis Map",
+        "url": "map.html",
+        "fullscreen": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": false,
+        "resizable": false,
+        "transparent": false,
+        "backgroundColor": "#05070f",
+        "focus": false,
+        "visible": false
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ws://127.0.0.1:8765 ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:"
+      "csp": "default-src 'self'; connect-src 'self' ws://127.0.0.1:8765 ipc: http://ipc.localhost https://basemaps.cartocdn.com https://*.basemaps.cartocdn.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://basemaps.cartocdn.com https://*.basemaps.cartocdn.com; font-src 'self' data:; worker-src 'self' blob:; child-src 'self' blob:"
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

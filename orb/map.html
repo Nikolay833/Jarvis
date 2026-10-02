@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#05070f" />
+    <title>Jarvis Map</title>
+    <link rel="preconnect" href="https://basemaps.cartocdn.com" crossorigin />
+    <link rel="preconnect" href="https://tiles.basemaps.cartocdn.com" crossorigin />
+  </head>
+  <body translate="no">
+    <div id="map" aria-label="Map"></div>
+    <div id="grid" aria-hidden="true"></div>
+    <div id="vignette" aria-hidden="true"></div>
+
+    <header id="frame">
+      <span id="brand">JARVIS // NAVIGATION</span>
+      <span id="readout" aria-hidden="true"><span id="coords"></span><span id="clock"></span></span>
+    </header>
+
+    <button id="close" type="button" aria-label="Close map">Close <kbd>Esc</kbd></button>
+
+    <aside id="panel" aria-label="Directions">
+      <h1 id="dest" aria-live="polite"></h1>
+      <p id="from"></p>
+      <div id="cards">
+        <div id="modes" role="radiogroup" aria-label="Travel mode"></div>
+        <div id="transit">
+          <div class="transit-text">
+            <span class="m">Public transport</span>
+            <span class="d">Timetables open in Google Maps</span>
+          </div>
+          <button id="open-transit" type="button">Open in Google Maps</button>
+        </div>
+      </div>
+      <h2 id="steps-title"></h2>
+      <ol id="steps" tabindex="0" aria-label="Turn by turn steps"></ol>
+    </aside>
+
+    <div id="corner">
+      <p id="caption" role="status" aria-live="polite"></p>
+      <div id="actions" role="group" aria-label="Confirm action" inert>
+        <button id="approve" type="button">Approve</button>
+        <button id="deny" type="button">Deny</button>
+      </div>
+      <div id="orbwrap"><div id="arc" aria-hidden="true"></div><canvas id="orb" aria-hidden="true"></canvas></div>
+    </div>
+
+    <p id="attrib">© OpenStreetMap contributors © CARTO</p>
+    <script type="module" src="/src/map.ts"></script>
+  </body>
+</html>

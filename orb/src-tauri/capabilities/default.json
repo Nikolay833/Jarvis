@@ -1,7 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Orb window: events (hotkey) and the set_clickthrough command.",
-  "windows": ["main"],
-  "permissions": ["core:default"]
+  "description": "Orb and map windows: events (hotkey) and the set_clickthrough / set_map_visible commands.",
+  "windows": [
+    "main",
+    "map"
+  ],
+  "permissions": [
+    "core:default"
+  ]
 }

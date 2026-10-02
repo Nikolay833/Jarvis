@@ -14,6 +14,31 @@ fn set_clickthrough(window: WebviewWindow, ignore: bool) -> Result<(), String> {
     window.set_ignore_cursor_events(ignore).map_err(|e| e.to_string())
 }
 
+/// Show or hide the full-screen "map" window (created hidden from tauri.conf.json). While the map is up the
+/// small orb window is hidden: the map page has its own orb in the bottom-right corner.
+#[tauri::command]
+fn set_map_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> {
+    let map = app
+        .get_webview_window("map")
+        .ok_or_else(|| "map window not found".to_string())?;
+    let main = app.get_webview_window("main");
+    if visible {
+        map.set_fullscreen(true).map_err(|e| e.to_string())?;
+        map.set_always_on_top(true).map_err(|e| e.to_string())?;
+        map.show().map_err(|e| e.to_string())?;
+        map.set_focus().map_err(|e| e.to_string())?; // Esc needs keyboard focus
+        if let Some(m) = main {
+            let _ = m.hide();
+        }
+    } else {
+        map.hide().map_err(|e| e.to_string())?;
+        if let Some(m) = main {
+            let _ = m.show();
+        }
+    }
+    Ok(())
+}
+
 /// Bottom-center of the primary monitor's work area (so it sits above the taskbar).
 fn place(win: &WebviewWindow) -> tauri::Result<()> {
     let Some(mon) = win.primary_monitor()? else {
@@ -44,7 +69,7 @@ pub fn run() {
                 })
                 .build(),
         )
-        .invoke_handler(tauri::generate_handler![set_clickthrough])
+        .invoke_handler(tauri::generate_handler![set_clickthrough, set_map_visible])
         .setup(move |app| {
             if let Some(win) = app.get_webview_window("main") {
                 place(&win)?;

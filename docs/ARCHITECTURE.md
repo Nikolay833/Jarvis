@@ -59,10 +59,11 @@ jarvis/                 Python package (the core)
   timeparse.py          Natural durations and times ("in 20 minutes", "tomorrow at 9")
   reminders.py          Persistent reminders/timers + asyncio scheduler (missed ones announced at start)
   briefing.py           Morning briefing (Open-Meteo weather, reminders, Claude sessions), first-wake-of-day logic
+  geo.py                Location (Windows location -> saved home -> IP), Nominatim geocoding, OSRM routing, step texts, spoken rounding
   extras.py             Glue: memory block into the agent, scheduler start, automatic briefing hook
   tools/                Tool registry + tools (system, files, apps, windows, chrome, spotify, claude_code,
                         claude_history, claude_chat, claude_sessions_tools, claude_terminal, memory_tools,
-                        reminder_tools, briefing_tool)
+                        reminder_tools, briefing_tool, maps_tools)
 scripts/                setup_windows.ps1, start_jarvis.ps1, install_claude_hooks.py
 tests/                  pytest, no hardware or network needed
 orb/                    Tauri v2 overlay app
@@ -84,6 +85,8 @@ Core to orb:
 | `confirm` | `id`, `summary` | Risky action waiting for approval. |
 | `confirm_resolved` | `id`, `approved`: bool | Approval answered (by voice or click). |
 | `job` | `id`, `kind`, `status`: `running` \| `done` \| `failed`, `summary` | Background job update (Claude Code runs). |
+| `map_show` | `origin`: `{lat, lon, label, accuracy, source: windows\|home\|ip}` or null, `destination`: `{lat, lon, label}`, `routes`: `[{mode: car\|walk, distance_m, duration_s, geometry: GeoJSON LineString [lon,lat], steps: [{text, distance_m}]}]`, `transit_url` ("" = no card), `focus`: `car\|walk\|transit\|""` | Open the full-screen map window. `routes` empty = just a place. |
+| `map_hide` | none | Close the map window (also echoed by the core after `map_closed`, so the orb window learns the map is gone). |
 
 Orb to core:
 
@@ -92,6 +95,8 @@ Orb to core:
 | `confirm_response` | `id`, `approved`: bool | User clicked approve/deny. |
 | `text_input` | `text` | Typed request instead of voice. |
 | `activate` | none | Hotkey/click: start listening without wake word. |
+| `map_closed` | none | The map window closed itself (Esc or Close button). |
+| `map_open_transit` | none | "Open in Google Maps" button: the core opens the last transit URL in the default browser. |
 | `claude_event` | `event` (`Stop`/`Notification`), `session_id`, `cwd`, `notification_type`, `message`, `last_assistant_message`, `transcript_path` | From `jarvis.claude_hook` (any local client): Jarvis announces it. |
 
 ## Audio flow and feedback
@@ -300,3 +305,35 @@ throttled for 30 s. Spoken through `announce()`, which waits for the current tur
 `enabled`, `announce_finish`, `announce_permission`, `min_turn_seconds` (a "finished" announcement needs the turn
 to have lasted that long, measured from the last real user message timestamp in the transcript to now; if
 unavailable it announces anyway).
+
+## Maps and directions
+
+"I want to go to X", "how do I get to X", "directions to X" go to the model, whose static prompt routes them to the
+`directions` tool (`tools/maps_tools.py`, all tools safe). `show_on_map(place)`, `close_map`, `open_transit_directions`
+and `where_am_i` complete the set; "close the map" and "where am I" are fast paths.
+
+- **Location** (`geo.locate`, cached 10 min, source and accuracy logged): 1. Windows location services via a hidden
+  `powershell.exe -NoProfile` running `System.Device.Location.GeoCoordinateWatcher` (waits up to ~5 s, 8 s timeout;
+  needs Settings > Privacy & security > Location on, including "Let desktop apps access your location"; if off or
+  denied it falls through). 2. The saved home: `[maps] home_address`, else a memory fact like "Home is 5 Graf Ignatiev
+  Street, Sofia" (`work` likewise); geocoded once and cached in `state.json` (`geo_cache`). 3. IP geolocation
+  (ipapi.co, fallback ip-api.com; accuracy 5 km). "home" / "work" also work as destinations.
+- **Geocoding**: Nominatim `/search` (`jsonv2`, limit 5, `viewbox` +-50 km around the origin, `bounded=0`, User-Agent
+  `Jarvis-voice-assistant/0.1 (personal use)`, at most 1 request per second). Among results at least half as important
+  as the best, the nearest to the origin wins. A miss is retried with `, <default_city>` appended.
+- **Routing**: FOSSGIS OSRM `routed-car` and `routed-foot` (`overview=full&geometries=geojson&steps=true`), fetched in
+  parallel. `step_text` turns maneuver type/modifier + road name into "Turn left onto Vitosha Boulevard".
+- **Public transport**: free OSRM has no timetables and Jarvis never invents times. The `transit_url`
+  (`google.com/maps/dir/?api=1&origin=..&destination=..&travelmode=transit`) is shown as a card with an "Open in Google
+  Maps" button; the spoken summary says so ("for public transport I've put a Google Maps link on screen").
+- **Map window** (`orb/map.html`, `orb/src/map.ts`): a second Tauri window `map`, created hidden from `tauri.conf.json`
+  (fullscreen, frameless, always on top, NOT click-through, focusable). The Rust command `set_map_visible` shows it and
+  hides the small orb window (the map page has its own orb with a glowing ring in the bottom-right corner, plus
+  caption and Approve/Deny pills), or reverses that. The map page has its own WebSocket to the core. Esc or the Close
+  button hides it and sends `map_closed`. Basemap: MapLibre GL JS (bundled) with the CARTO dark-matter style, recolored
+  at load to the HUD palette (`map-style.ts`); if the style cannot be fetched it falls back to a no-basemap HUD
+  (grid, route, markers). CSP allows `basemaps.cartocdn.com` and `worker-src blob:`.
+  `vite.config.ts` copies MapLibre's worker files to `/maplibre/` (maplibre 6 loads `maplibre-gl-worker.mjs` by
+  relative URL, which a bundle would break).
+- Errors are spoken: offline gives "I can't reach the map services right now. Please check the internet connection."
+- Config `[maps]`: `home_address`, `work_address`, `default_city`, `geocoder_url`, `routing_url`, `show_transit_link`.

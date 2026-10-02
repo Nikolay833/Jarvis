@@ -508,6 +508,10 @@ class Assistant:
                 self.submit_text(str(msg.get("text", "")))
             elif kind == "claude_event":
                 self.on_claude_event(msg)
+            elif kind == "map_closed":
+                self.bus.emit_nowait("map_hide")  # the map window closed itself (Esc/button): tell the orb window
+            elif kind == "map_open_transit":
+                asyncio.ensure_future(self.agent.registry.call("open_transit_directions", {}))
             elif kind == "activate":
                 if self.turn_lock.locked():
                     self.speaker.stop()  # interrupt speech; ignore if mid-recording
