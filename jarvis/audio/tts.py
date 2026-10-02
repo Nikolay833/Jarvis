@@ -14,6 +14,7 @@ import numpy as np
 
 from .recorder import display_level, rms_of
 from .mic import parse_device
+from .voicefx import apply_fx
 
 SAMPLE_RATE = 24000
 PLAY_BLOCK = 800  # 33 ms -> about 30 level events per second
@@ -76,6 +77,28 @@ class SentenceBuffer:
 
     def discard(self) -> None:
         self._buf = ""
+
+
+def parse_voice_spec(spec: str) -> list[tuple[str, float]]:
+    """"bm_george" -> [("bm_george", 1.0)]; "bm_george:0.6,bm_lewis:0.4" -> normalised weights."""
+    out: list[tuple[str, float]] = []
+    for part in str(spec).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        name, _, w = part.partition(":")
+        name = name.strip()
+        try:
+            weight = float(w) if w.strip() else 1.0
+        except ValueError:
+            raise ValueError(f"bad voice weight in {part!r}") from None
+        if not name or weight < 0:
+            raise ValueError(f"bad voice spec {part!r}")
+        out.append((name, weight))
+    total = sum(w for _, w in out)
+    if not out or total <= 0:
+        raise ValueError(f"empty voice spec {spec!r}")
+    return [(n, w / total) for n, w in out]
 
 
 def _cuda_available() -> bool:
@@ -158,9 +181,12 @@ class KokoroStream:
 
 class KokoroSpeaker:
     def __init__(self, bus: Any, voice: str = "bm_george", lang_code: str = "b",
-                 speed: float = 1.0, device: str = "") -> None:
+                 speed: float = 1.0, device: str = "", fx: str = "none", fx_amount: float = 0.35) -> None:
         self.bus = bus
         self.voice = voice
+        self.fx = fx
+        self.fx_amount = fx_amount
+        self._voice_arg: Any = None
         self.lang_code = lang_code
         self.speed = speed
         self.device = parse_device(device)
@@ -187,15 +213,34 @@ class KokoroSpeaker:
             except Exception:  # noqa: BLE001
                 log.info("kokoro device: %s (requested)", device)
 
+    def _voice(self) -> Any:
+        """What KPipeline gets as `voice`: a name, or for a weighted blend a tensor (cached)."""
+        if self._voice_arg is None:
+            spec = parse_voice_spec(self.voice)
+            if len(spec) == 1:
+                self._voice_arg = spec[0][0]
+            else:
+                packs = [self._pipeline.load_voice(n) * w for n, w in spec]
+                blend = packs[0]
+                for p in packs[1:]:
+                    blend = blend + p
+                self._voice_arg = blend  # float32 tensor; load_voice() passes it through
+        return self._voice_arg
+
     def synth(self, sentence: str) -> np.ndarray:
-        """Blocking synthesis of one sentence to float32 24 kHz mono."""
+        """Blocking synthesis of one sentence to float32 24 kHz mono, with the voice fx applied."""
         self.load()
         parts: list[np.ndarray] = []
-        for _gs, _ps, audio in self._pipeline(sentence, voice=self.voice, speed=self.speed):
+        for _gs, _ps, audio in self._pipeline(sentence, voice=self._voice(), speed=self.speed):
             if hasattr(audio, "detach"):
                 audio = audio.detach().cpu().numpy()
             parts.append(np.asarray(audio, dtype=np.float32).reshape(-1))
-        return np.concatenate(parts) if parts else np.zeros(0, dtype=np.float32)
+        out = np.concatenate(parts) if parts else np.zeros(0, dtype=np.float32)
+        try:
+            return apply_fx(out, self.fx, self.fx_amount)
+        except Exception:  # noqa: BLE001 - never lose speech to an fx bug
+            log.exception("voice fx failed; playing dry")
+            return out
 
     def warm_up(self) -> None:
         """Synthesize a short phrase so kernels are compiled before the first real reply."""

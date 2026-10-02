@@ -37,9 +37,13 @@ model = "nemo-parakeet-tdt-0.6b-v2"  # English; "nemo-parakeet-tdt-0.6b-v3" is m
 device = "cuda"          # falls back to CPU if the GPU provider fails
 
 [tts]
-voice = "bm_george"      # Kokoro British male
+voice = "bm_george"      # Kokoro British male: bm_george, bm_lewis, bm_daniel, bm_fable
+                         # or a blend: "bm_george:0.6,bm_lewis:0.4"
 lang_code = "b"          # "b" = British English
-speed = 1.0
+speed = 1.05             # Jarvis speaks briskly
+fx = "jarvis"            # "jarvis" = subtle AI sheen (room, presence, chorus), "none" = plain voice
+fx_amount = 0.35         # 0..1
+# Audition presets: python -m jarvis.voices
 
 [wakeword]
 model = "hey_jarvis"

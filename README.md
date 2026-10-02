@@ -48,6 +48,22 @@ Compare engines on your own voice and mic: `python -m jarvis.stt_bench` (records
 `logs/stt_bench/`, then prints engine / time / transcript per phrase) or
 `python -m jarvis.stt_bench --files a.wav b.wav`.
 
+## Voice
+
+Jarvis speaks with a Jarvis-style British voice: Kokoro's own male voices plus a subtle processing chain
+(light room, presence, faint digital sheen). No voice cloning. Settings in `[tts]`:
+
+```toml
+[tts]
+voice = "bm_george"          # bm_george, bm_lewis, bm_daniel, bm_fable, or "bm_george:0.6,bm_lewis:0.4"
+speed = 1.05
+fx = "jarvis"                # or "none"
+fx_amount = 0.35             # 0..1
+```
+
+Audition presets with `python -m jarvis.voices` (`--save DIR` writes wavs;
+`--voice bm_lewis --fx jarvis --amount 0.4 --speed 1.05` tries a custom one).
+
 ## More commands
 
 - Windows: "minimise Chrome", "maximise VS Code", "show the desktop", "focus Spotify", "close Notepad"

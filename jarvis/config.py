@@ -57,9 +57,11 @@ class ParakeetConfig:
 
 @dataclass
 class TTSConfig:
-    voice: str = "bm_george"
+    voice: str = "bm_george"  # or a blend: "bm_george:0.6,bm_lewis:0.4"
     lang_code: str = "b"
-    speed: float = 1.0
+    speed: float = 1.05
+    fx: str = "jarvis"  # "jarvis" | "none"
+    fx_amount: float = 0.35  # 0..1
 
 
 @dataclass
