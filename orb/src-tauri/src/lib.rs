@@ -15,8 +15,8 @@ fn set_clickthrough(window: WebviewWindow, ignore: bool) -> Result<(), String> {
 }
 
 /// Share of the primary monitor's work area the map overlay covers (centered).
-const MAP_SCALE_W: f64 = 0.70;
-const MAP_SCALE_H: f64 = 0.72;
+const MAP_SCALE_W: f64 = 0.92;
+const MAP_SCALE_H: f64 = 0.92;
 
 /// Size the map window to ~70% of the primary work area and center it. The page fades out toward its edges.
 fn place_map(win: &WebviewWindow) -> tauri::Result<()> {

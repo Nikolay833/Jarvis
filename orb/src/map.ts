@@ -191,7 +191,7 @@ function animateRoutes(m: MapLibreMap, routes: MapRoute[]): void {
 function fitPadding(): { top: number; bottom: number; left: number; right: number } {
   const h = window.innerHeight;
   const w = window.innerWidth;
-  return { top: Math.round(h * 0.2), bottom: Math.round(h * 0.3), left: Math.round(w * 0.14), right: Math.round(w * 0.14) };
+  return { top: Math.round(h * 0.27), bottom: Math.round(h * 0.34), left: Math.round(w * 0.27), right: Math.round(w * 0.27) };
 }
 
 function fit(m: MapLibreMap, msg: MapShow): void {
