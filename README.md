@@ -111,7 +111,7 @@ Audition presets with `python -m jarvis.voices` (`--save DIR` writes wavs;
   did lately. It is also spoken automatically the first time you wake Jarvis each day after 05:00. Weather comes from
   Open-Meteo (free, no key) for the city in `[briefing]` (default Sofia; set `city`, `latitude`, `longitude`).
 - Maps: "I want to go to Sofia Airport", "how do I get to X", "directions to X", "show me X on the map" open a
-  full-screen HUD map with car and walking routes (time, distance, steps) and a "Public transport" card that opens
+  HUD map overlay with car and walking routes (time, distance, steps) and a "Public transport" card that opens
   Google Maps (no free timetable data exists, so Jarvis never guesses bus times). "Close the map" or Esc closes it;
   "where am I" says your location. Your position comes from Windows location services first (turn on Settings >
   Privacy & security > Location, including "Let desktop apps access your location"), then the saved home address

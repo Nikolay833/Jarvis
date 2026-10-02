@@ -14,27 +14,42 @@ fn set_clickthrough(window: WebviewWindow, ignore: bool) -> Result<(), String> {
     window.set_ignore_cursor_events(ignore).map_err(|e| e.to_string())
 }
 
-/// Show or hide the full-screen "map" window (created hidden from tauri.conf.json). While the map is up the
-/// small orb window is hidden: the map page has its own orb in the bottom-right corner.
+/// Share of the primary monitor's work area the map overlay covers (centered).
+const MAP_SCALE_W: f64 = 0.70;
+const MAP_SCALE_H: f64 = 0.72;
+
+/// Size the map window to ~70% of the primary work area and center it. The page fades out toward its edges.
+fn place_map(win: &WebviewWindow) -> tauri::Result<()> {
+    let Some(mon) = win.primary_monitor()? else {
+        return Ok(());
+    };
+    let area = mon.work_area();
+    let w = (area.size.width as f64 * MAP_SCALE_W).round() as i32;
+    let h = (area.size.height as f64 * MAP_SCALE_H).round() as i32;
+    let x = area.position.x + (area.size.width as i32 - w) / 2;
+    let y = area.position.y + (area.size.height as i32 - h) / 2;
+    win.set_size(PhysicalSize::new(w as u32, h as u32))?;
+    win.set_position(PhysicalPosition::new(x, y))?;
+    Ok(())
+}
+
+/// Show or hide the transparent "map" overlay window (created hidden from tauri.conf.json). The small orb window
+/// stays visible and is re-raised above the map so the orb and confirm pills remain usable.
 #[tauri::command]
 fn set_map_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> {
     let map = app
         .get_webview_window("map")
         .ok_or_else(|| "map window not found".to_string())?;
-    let main = app.get_webview_window("main");
     if visible {
-        map.set_fullscreen(true).map_err(|e| e.to_string())?;
+        place_map(&map).map_err(|e| e.to_string())?;
         map.set_always_on_top(true).map_err(|e| e.to_string())?;
         map.show().map_err(|e| e.to_string())?;
         map.set_focus().map_err(|e| e.to_string())?; // Esc needs keyboard focus
-        if let Some(m) = main {
-            let _ = m.hide();
+        if let Some(main) = app.get_webview_window("main") {
+            let _ = main.set_always_on_top(true); // stack the orb above the map
         }
     } else {
         map.hide().map_err(|e| e.to_string())?;
-        if let Some(m) = main {
-            let _ = m.show();
-        }
     }
     Ok(())
 }

@@ -12,7 +12,6 @@ const orb = new Orb($<HTMLCanvasElement>("orb"));
 const caption = new Caption($("caption"));
 
 let state: OrbState = "idle";
-let mapOpen = false; // while the map is up its own window (and WebSocket) owns the hotkey
 
 const bus = new Bus(
   new URLSearchParams(location.search).get("ws") ?? "ws://127.0.0.1:8765",
@@ -20,7 +19,6 @@ const bus = new Bus(
   () => {
     // Core went away: drop everything and go invisible.
     pills.hide();
-    mapOpen = false;
     setState("idle");
   },
 );
@@ -69,17 +67,13 @@ function handle(m: CoreMessage): void {
       pills.resolved(m.id);
       break;
     case "map_show":
-      mapOpen = true;
-      break;
     case "map_hide":
-      mapOpen = false;
-      break;
+    case "map_control":
+      break; // drawn by the separate map window
     case "job":
       break; // background jobs are spoken by the core; nothing to draw
   }
 }
 
-onHotkey(() => {
-  if (!mapOpen) bus.send({ type: "activate" });
-});
+onHotkey(() => bus.send({ type: "activate" }));
 bus.start();

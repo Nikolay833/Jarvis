@@ -8,11 +8,11 @@
   --ink: #e6f1ff;
   --ink-dim: #9db8d9; /* 8.9:1 on --bg */
   --on-accent: #04122e;
-  --glass: rgb(6 12 26 / 0.66);
+  --glass: rgb(6 12 26 / 0.84);
   --hairline: rgb(74 134 255 / 0.24);
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
   --mono: "Geist Mono Variable", ui-monospace, "Cascadia Mono", Consolas, monospace;
-  --panel-w: min(380px, calc(100vw - 32px));
+  --panel-w: min(360px, 34vw);
 }
 
 * { box-sizing: border-box; margin: 0; }
@@ -21,7 +21,7 @@ html, body {
   color-scheme: dark;
   height: 100%;
   overflow: hidden;
-  background: var(--bg);
+  background: transparent; /* the window is a transparent overlay; the stage fades out at its edges */
   user-select: none;
   -webkit-user-select: none;
 }
@@ -34,19 +34,28 @@ body {
 }
 
 /* ---- map and screen overlays ---------------------------------------------------------------------- */
-#map {
+/* Everything map-like lives in #stage, which fades to full transparency toward the window edges so the desktop
+   shows through (two linear fades intersected = soft rounded-rectangle falloff, no hard border). */
+#stage {
   position: fixed;
   inset: 0;
   opacity: 0;
   transition: opacity 0.6s var(--ease);
+  -webkit-mask-image: linear-gradient(to right, transparent 0, rgb(0 0 0 / 0.1) 4%, rgb(0 0 0 / 0.4) 8%, rgb(0 0 0 / 0.8) 13%, #000 18%, #000 82%, rgb(0 0 0 / 0.8) 87%, rgb(0 0 0 / 0.4) 92%, rgb(0 0 0 / 0.1) 96%, transparent 100%),
+    linear-gradient(to bottom, transparent 0, rgb(0 0 0 / 0.1) 5%, rgb(0 0 0 / 0.4) 10%, rgb(0 0 0 / 0.8) 16%, #000 22%, #000 78%, rgb(0 0 0 / 0.8) 84%, rgb(0 0 0 / 0.4) 90%, rgb(0 0 0 / 0.1) 95%, transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, rgb(0 0 0 / 0.1) 4%, rgb(0 0 0 / 0.4) 8%, rgb(0 0 0 / 0.8) 13%, #000 18%, #000 82%, rgb(0 0 0 / 0.8) 87%, rgb(0 0 0 / 0.4) 92%, rgb(0 0 0 / 0.1) 96%, transparent 100%),
+    linear-gradient(to bottom, transparent 0, rgb(0 0 0 / 0.1) 5%, rgb(0 0 0 / 0.4) 10%, rgb(0 0 0 / 0.8) 16%, #000 22%, #000 78%, rgb(0 0 0 / 0.8) 84%, rgb(0 0 0 / 0.4) 90%, rgb(0 0 0 / 0.1) 95%, transparent 100%);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
 }
-body.open #map { opacity: 1; }
+body.open #stage { opacity: 0.94; }
+#map { position: absolute; inset: 0; background: transparent; }
 
 .maplibregl-canvas { outline: none; }
 .maplibregl-canvas-container.maplibregl-interactive { cursor: grab; }
 
 #grid {
-  position: fixed;
+  position: absolute;
   inset: 0;
   pointer-events: none;
   /* big cells + fine dot lattice, both very faint */
@@ -56,18 +65,13 @@ body.open #map { opacity: 1; }
     radial-gradient(circle, rgb(120 170 255 / 0.16) 0.8px, transparent 1.2px);
   background-size: 96px 96px, 96px 96px, 24px 24px;
   background-position: -1px -1px, -1px -1px, 0 0;
-  opacity: 0;
-  transition: opacity 0.8s var(--ease);
-}
-body.open #grid { opacity: 1; }
+  }
 
 #vignette {
-  position: fixed;
+  position: absolute;
   inset: 0;
   pointer-events: none;
-  background:
-    radial-gradient(ellipse at 55% 50%, transparent 52%, rgb(5 7 15 / 0.72) 100%),
-    linear-gradient(to bottom, rgb(5 7 15 / 0.6), transparent 90px);
+  background: radial-gradient(ellipse at 55% 50%, transparent 55%, rgb(5 7 15 / 0.5) 100%);
 }
 
 #frame {
@@ -76,7 +80,8 @@ body.open #grid { opacity: 1; }
   left: 0;
   right: 0;
   height: 44px;
-  padding: 0 176px 0 24px; /* room for the close button */
+  margin: 7.5vh 0 0;
+  padding: 0 calc(8vw + 150px) 0 8vw; /* inside the faded area, room for the close button */
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -84,13 +89,14 @@ body.open #grid { opacity: 1; }
   font: 500 11px/1 var(--mono);
   letter-spacing: 0.16em;
   color: var(--ink-dim);
+  text-shadow: 0 0 10px rgb(5 7 15 / 0.95), 0 1px 2px rgb(5 7 15 / 0.9);
 }
 /* thin frame line with a small center notch */
 #frame::before {
   content: "";
   position: absolute;
-  left: 16px;
-  right: 16px;
+  left: 6vw;
+  right: 6vw;
   top: 12px;
   height: 1px;
   background: linear-gradient(to right, transparent, var(--hairline) 6%, var(--hairline) 94%, transparent);
@@ -127,8 +133,8 @@ button:focus-visible, #steps:focus-visible { outline: 2px solid var(--ink); outl
 
 #close {
   position: fixed;
-  top: 28px;
-  right: 24px;
+  top: calc(7.5vh + 16px);
+  right: 8vw;
   height: 40px;
   padding: 0 8px 0 18px;
   display: inline-flex;
@@ -158,10 +164,10 @@ kbd {
 /* ---- side panel ----------------------------------------------------------------------------------- */
 #panel {
   position: fixed;
-  top: 72px;
-  left: 24px;
+  top: calc(7.5vh + 64px);
+  left: 8vw;
   width: var(--panel-w);
-  max-height: calc(100dvh - 96px);
+  max-height: calc(100dvh - 7.5vh - 64px - 11vh);
   padding: 22px 20px 12px;
   display: flex;
   flex-direction: column;
@@ -270,102 +276,10 @@ body.open #panel { opacity: 1; transform: none; pointer-events: auto; }
 }
 #steps .dist { font: 400 12px/1 var(--mono); color: var(--ink-dim); white-space: nowrap; }
 
-/* ---- corner orb ----------------------------------------------------------------------------------- */
-#corner {
-  position: fixed;
-  right: 28px;
-  bottom: 24px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 12px;
-  pointer-events: none;
-  opacity: 0;
-  transform: translateY(10px) scale(0.92);
-  transform-origin: bottom right;
-  transition: opacity 0.6s var(--ease) 0.1s, transform 0.7s var(--ease) 0.1s;
-}
-body.open #corner { opacity: 1; transform: none; }
-
-#caption {
-  max-width: min(440px, calc(100vw - 220px));
-  height: 1.5em;
-  font-size: 14px;
-  line-height: 1.5;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: right;
-  text-shadow: 0 1px 2px rgb(5 7 15 / 0.9), 0 0 14px rgb(5 7 15 / 0.9);
-  opacity: 0;
-  transition: opacity 0.45s var(--ease);
-}
-#caption.on { opacity: 1; }
-#caption.dim { opacity: 0.6; }
-#caption.swap { opacity: 0; transition-duration: 0.12s; }
-
-#actions {
-  display: flex;
-  gap: 10px;
-  height: 0;
-  overflow: hidden;
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity 0.3s var(--ease), height 0.3s var(--ease), visibility 0s 0.3s;
-}
-#actions.on { height: 36px; overflow: visible; opacity: 1; visibility: visible; pointer-events: auto; transition-delay: 0s; }
-#actions button {
-  min-width: 88px;
-  height: 36px;
-  padding: 0 18px;
-  font-size: 13px;
-  font-weight: 500;
-  border-radius: 999px;
-}
-#approve { color: var(--on-accent); background: var(--accent); border: 1px solid var(--accent); }
-#approve:hover { background: #6f9dff; }
-#deny { color: var(--ink); background: var(--glass); border: 1px solid rgb(230 241 255 / 0.45); }
-#deny:hover { border-color: var(--ink); }
-
-#orbwrap {
-  position: relative;
-  width: 148px;
-  height: 148px;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgb(5 9 22 / 0.92) 52%, rgb(5 9 22 / 0.55) 100%);
-  border: 1.5px solid rgb(74 134 255 / 0.75);
-  box-shadow: 0 0 26px rgb(74 134 255 / 0.5), inset 0 0 26px rgb(74 134 255 / 0.22);
-}
-#orbwrap #orb {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 228px;
-  height: 228px;
-  transform: translate(-50%, -50%);
-  pointer-events: none;
-}
-/* a bright arc circles the ring while Jarvis is listening, thinking or speaking */
-#arc {
-  position: absolute;
-  inset: -9px;
-  border-radius: 50%;
-  background: conic-gradient(from 0deg, transparent 0 62%, rgb(95 200 255 / 0.9) 90%, transparent 100%);
-  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1px));
-  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1px));
-  opacity: 0;
-  transition: opacity 0.4s var(--ease);
-}
-#orbwrap[data-state="listening"] #arc,
-#orbwrap[data-state="thinking"] #arc,
-#orbwrap[data-state="speaking"] #arc { opacity: 1; animation: spin 3.2s linear infinite; }
-#orbwrap[data-state="thinking"] #arc { animation-duration: 1.6s; }
-@keyframes spin { to { transform: rotate(360deg); } }
-
 #attrib {
   position: fixed;
-  left: 24px;
-  bottom: 10px;
+  right: 8vw;
+  bottom: 11vh;
   font-size: 10px;
   letter-spacing: 0.03em;
   color: var(--ink-dim);
@@ -419,20 +333,15 @@ body.open #corner { opacity: 1; transform: none; }
   backdrop-filter: blur(10px);
 }
 
-/* ---- small screens: panel becomes a bottom sheet ------------------------------------------------- */
+/* ---- small windows: panel becomes a bottom sheet -------------------------------------------------- */
 @media (max-width: 719px) {
   #panel { top: auto; bottom: 12px; left: 16px; right: 16px; width: auto; max-height: 52dvh; }
-  #corner { right: 16px; bottom: calc(52dvh + 24px); }
-  #orbwrap { width: 96px; height: 96px; }
-  #orbwrap #orb { width: 136px; height: 136px; }
   #attrib { display: none; }
-  #frame { padding: 0 16px; }
   #readout { display: none; }
-  #close { right: 16px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  #map, #grid, #panel, #corner, #close, #caption, #actions, button, #arc { transition-duration: 0.01s; transition-delay: 0s; }
-  #panel, #corner { transform: none; }
-  .mk-origin .pulse, #orbwrap #arc { animation: none; }
+  #stage, #panel, #close, button { transition-duration: 0.01s; transition-delay: 0s; }
+  #panel { transform: none; }
+  .mk-origin .pulse { animation: none; }
 }

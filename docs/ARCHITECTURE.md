@@ -85,7 +85,8 @@ Core to orb:
 | `confirm` | `id`, `summary` | Risky action waiting for approval. |
 | `confirm_resolved` | `id`, `approved`: bool | Approval answered (by voice or click). |
 | `job` | `id`, `kind`, `status`: `running` \| `done` \| `failed`, `summary` | Background job update (Claude Code runs). |
-| `map_show` | `origin`: `{lat, lon, label, accuracy, source: windows\|home\|ip}` or null, `destination`: `{lat, lon, label}`, `routes`: `[{mode: car\|walk, distance_m, duration_s, geometry: GeoJSON LineString [lon,lat], steps: [{text, distance_m}]}]`, `transit_url` ("" = no card), `focus`: `car\|walk\|transit\|""` | Open the full-screen map window. `routes` empty = just a place. |
+| `map_show` | `origin`: `{lat, lon, label, accuracy, source: windows\|home\|ip}` or null, `destination`: `{lat, lon, label}`, `routes`: `[{mode: car\|walk, distance_m, duration_s, geometry: GeoJSON LineString [lon,lat], steps: [{text, distance_m}]}]`, `transit_url` ("" = no card), `focus`: `car\|walk\|transit\|""` | Open the map overlay. `routes` empty = just a place; `destination.bbox` [south, north, west, east] sets the zoom. |
+| `map_control` | `action`: `zoom_in`\|`zoom_out` (+`amount` levels), `pan` (+`direction` north\|south\|east\|west, `amount` half-screens), `reset` | Move the open map (tool `map_control`). Zoom to a place and "centre on me" send `map_show` instead. |
 | `map_hide` | none | Close the map window (also echoed by the core after `map_closed`, so the orb window learns the map is gone). |
 
 Orb to core:
@@ -327,10 +328,17 @@ and `where_am_i` complete the set; "close the map" and "where am I" are fast pat
   (`google.com/maps/dir/?api=1&origin=..&destination=..&travelmode=transit`) is shown as a card with an "Open in Google
   Maps" button; the spoken summary says so ("for public transport I've put a Google Maps link on screen").
 - **Map window** (`orb/map.html`, `orb/src/map.ts`): a second Tauri window `map`, created hidden from `tauri.conf.json`
-  (fullscreen, frameless, always on top, NOT click-through, focusable). The Rust command `set_map_visible` shows it and
-  hides the small orb window (the map page has its own orb with a glowing ring in the bottom-right corner, plus
-  caption and Approve/Deny pills), or reverses that. The map page has its own WebSocket to the core. Esc or the Close
-  button hides it and sends `map_closed`. Basemap: MapLibre GL JS (bundled) with the CARTO dark-matter style, recolored
+  (transparent, frameless, always on top, focusable, not fullscreen). The Rust command `set_map_visible` sizes it to ~70%
+  of the primary work area, centers it, shows it and re-raises the small orb window above it (the orb stays visible and
+  keeps handling captions and Approve/Deny). The page background is transparent and `#stage` (map + grid) fades to full
+  transparency toward the edges with a CSS mask, so the desktop shows through; the panel, frame and Close button sit in
+  the solid area. The map page has its own WebSocket to the core. Esc or the Close button hides it and sends `map_closed`.
+- **Showing a place** (`show_on_map`, `map_control zoom_to`): geocoding ranks by Nominatim importance; the nearest
+  result only breaks ties among results at least 85% as important as the best, and a nearby-biased search that finds
+  nothing important (< 0.5) is followed by an unbiased one so "London" is London, UK. The event carries the place's
+  `bbox` [south, north, west, east]; the map zooms to it (country ~5, city ~10, street ~16). Only `directions` fits the
+  route bounds. **Map control**: `map_control(action, place, amount)` (zoom_in, zoom_out, zoom_to, pan_*, center_on_me,
+  reset) returns what happened or an error ("The map isn't open"); the prompt forbids claiming a move without it. Basemap: MapLibre GL JS (bundled) with the CARTO dark-matter style, recolored
   at load to the HUD palette (`map-style.ts`); if the style cannot be fetched it falls back to a no-basemap HUD
   (grid, route, markers). CSP allows `basemaps.cartocdn.com` and `worker-src blob:`.
   `vite.config.ts` copies MapLibre's worker files to `/maplibre/` (maplibre 6 loads `maplibre-gl-worker.mjs` by

@@ -7,10 +7,8 @@ import type { GeoJSONSource, LngLatBoundsLike } from "maplibre-gl";
 import { Bus } from "./bus";
 import { fmtCoords, fmtDistance, fmtDuration, fmtFrom } from "./format";
 import { hudStyle, offlineStyle, STYLE_URL } from "./map-style";
-import { Orb } from "./orb";
-import type { CoreMessage, MapRoute, MapShow, OrbState } from "./protocol";
-import { onHotkey, setMapVisible } from "./tauri";
-import { Caption, ConfirmPills } from "./ui";
+import type { CoreMessage, MapControl, MapRoute, MapShow } from "./protocol";
+import { setMapVisible } from "./tauri";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 // maplibre 6 looks for its worker file next to its own module, which a bundle does not keep: vite.config.ts
@@ -23,31 +21,6 @@ const ROUTE_COLOR = { car: "#5ff0ff", walk: "#8fb2ff" } as const;
 const MODE_LABEL = { car: "Car", walk: "Walk" } as const;
 const DRAW_MS = 1000;
 
-// ---- corner orb, caption, confirm pills (same protocol as the small overlay) --------------------------
-const orb = new Orb($<HTMLCanvasElement>("orb"));
-orb.setForceVisible(true); // the orb stays in the corner while the map is open
-const caption = new Caption($("caption"));
-const wrap = $("orbwrap");
-let state: OrbState = "idle";
-
-const pills = new ConfirmPills(
-  $("actions"),
-  $<HTMLButtonElement>("approve"),
-  $<HTMLButtonElement>("deny"),
-  (id, approved) => bus.send({ type: "confirm_response", id, approved }),
-  () => {},
-);
-
-function setState(next: OrbState): void {
-  const prev = state;
-  state = next;
-  orb.setState(next);
-  wrap.dataset.state = next;
-  if (next === "listening" && prev !== "listening" && !pills.pending) caption.clear();
-  caption.dim(next === "thinking");
-  if (next === "idle" && !pills.pending) caption.fadeOut();
-}
-
 // ---- state --------------------------------------------------------------------------------------------
 let isOpen = false;
 let map: MapLibreMap | null = null;
@@ -58,14 +31,7 @@ let selected: "car" | "walk" = "car";
 let markers: Marker[] = [];
 let drawRaf = 0;
 
-const bus = new Bus(
-  params.get("ws") ?? "ws://127.0.0.1:8765",
-  handle,
-  () => {
-    pills.hide();
-    setState("idle");
-  },
-);
+const bus = new Bus(params.get("ws") ?? "ws://127.0.0.1:8765", handle, () => {});
 
 function handle(m: CoreMessage): void {
   switch (m.type) {
@@ -75,24 +41,8 @@ function handle(m: CoreMessage): void {
     case "map_hide":
       void close(false);
       break;
-    case "state":
-      setState(m.state);
-      break;
-    case "level":
-      orb.setLevel(m.rms);
-      break;
-    case "transcript":
-      if (state !== "speaking") caption.transcript(m.text, m.final);
-      break;
-    case "reply":
-      caption.reply(m.text);
-      break;
-    case "confirm":
-      caption.summary(m.summary);
-      pills.show(m.id);
-      break;
-    case "confirm_resolved":
-      pills.resolved(m.id);
+    case "map_control":
+      control(m);
       break;
   }
 }
@@ -145,6 +95,7 @@ function ensureMap(): Promise<MapLibreMap> {
       });
     });
     map = m;
+    if (params.has("debug")) (window as unknown as { __map?: MapLibreMap }).__map = m; // for screenshots/tests
     return m;
   })();
   return mapReady;
@@ -246,25 +197,73 @@ function animateRoutes(m: MapLibreMap, routes: MapRoute[]): void {
   drawRaf = requestAnimationFrame(step);
 }
 
+/** Space the panel and frame take, so the route/place is centered in the free part of the overlay. */
+function fitPadding(): { top: number; bottom: number; left: number; right: number } {
+  const wide = window.innerWidth >= 720;
+  const panel = $("panel").getBoundingClientRect();
+  const left = wide ? Math.round(panel.right + 28) : 40;
+  const bottom = wide ? Math.round(window.innerHeight * 0.17) : Math.round(window.innerHeight * 0.52) + 40;
+  return { top: Math.round(window.innerHeight * 0.2), bottom, left, right: Math.round(window.innerWidth * 0.14) };
+}
+
 function fit(m: MapLibreMap, msg: MapShow): void {
-  const pts: [number, number][] = [[msg.destination.lon, msg.destination.lat]];
-  if (msg.origin) pts.push([msg.origin.lon, msg.origin.lat]);
-  for (const r of msg.routes) pts.push(...r.geometry.coordinates);
-  const wide = window.innerWidth >= 900;
-  // wide: the panel is on the left; narrow: it is a bottom sheet (max 52% of the height)
-  const padding = wide
-    ? { top: 96, bottom: 150, right: 96, left: 440 }
-    : { top: 96, bottom: Math.round(window.innerHeight * 0.52) + 40, right: 96, left: 40 };
+  const padding = fitPadding();
   const duration = reduceQuery.matches ? 0 : 1300;
-  if (pts.length === 1) {
-    m.easeTo({ center: pts[0], zoom: 14.5, duration, padding });
+  const d = msg.destination;
+  if (msg.routes.length === 0 && !msg.origin) {
+    // a place: fly to it and zoom to its own extent (country ~5, city ~10, street/POI ~16)
+    if (d.bbox) {
+      const [s, n, w, e] = d.bbox;
+      // fit the extent, then come in a little: an administrative bbox is generous (London fits at ~9, a city looks right at ~10)
+      const cam = m.cameraForBounds([[w, s], [e, n]] as LngLatBoundsLike, { padding, maxZoom: 16.5 });
+      if (cam?.center && cam.zoom !== undefined) {
+        m.easeTo({ center: cam.center, zoom: Math.min(cam.zoom + 1, 16.5), duration });
+      } else {
+        m.flyTo({ center: [d.lon, d.lat], zoom: 12, duration });
+      }
+    } else {
+      m.flyTo({ center: [d.lon, d.lat], zoom: 14.5, duration });
+    }
     return;
   }
+  const pts: [number, number][] = [[d.lon, d.lat]];
+  if (msg.origin) pts.push([msg.origin.lon, msg.origin.lat]);
+  for (const r of msg.routes) pts.push(...r.geometry.coordinates);
   const b = pts.reduce(
     (acc, p) => [Math.min(acc[0], p[0]), Math.min(acc[1], p[1]), Math.max(acc[2], p[0]), Math.max(acc[3], p[1])],
     [180, 90, -180, -90],
   );
   m.fitBounds([[b[0], b[1]], [b[2], b[3]]] as LngLatBoundsLike, { padding, duration, maxZoom: 16 });
+}
+
+/** Geographic point at the middle of the free (unpadded) area: zooming around it keeps the shown place in view. */
+function viewCenter(m: MapLibreMap) {
+  const p = fitPadding();
+  return m.unproject([(p.left + window.innerWidth - p.right) / 2, (p.top + window.innerHeight - p.bottom) / 2]);
+}
+
+/** Voice zoom/pan/reset from the core (tool map_control). */
+function control(c: MapControl): void {
+  if (!map || !isOpen) return;
+  const duration = reduceQuery.matches ? 0 : 600;
+  switch (c.action) {
+    case "zoom_in":
+      map.easeTo({ zoom: map.getZoom() + c.amount, around: viewCenter(map), duration });
+      break;
+    case "zoom_out":
+      map.easeTo({ zoom: Math.max(map.getZoom() - c.amount, 1), around: viewCenter(map), duration });
+      break;
+    case "pan": {
+      const dx = c.direction === "east" ? 1 : c.direction === "west" ? -1 : 0;
+      const dy = c.direction === "south" ? 1 : c.direction === "north" ? -1 : 0;
+      const k = 0.4 * c.amount;
+      map.panBy([dx * k * window.innerWidth, dy * k * window.innerHeight], { duration });
+      break;
+    }
+    case "reset":
+      if (current) fit(map, current);
+      break;
+  }
 }
 
 // ---- panel --------------------------------------------------------------------------------------------
@@ -382,9 +381,6 @@ window.addEventListener("keydown", (e) => {
   }
 });
 $("open-transit").addEventListener("click", () => bus.send({ type: "map_open_transit" }));
-onHotkey(() => {
-  if (isOpen) bus.send({ type: "activate" });
-});
 
 // roving radio group: arrows switch between Car and Walk
 $("modes").addEventListener("keydown", (e) => {

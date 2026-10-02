@@ -53,6 +53,11 @@ def _re(pattern: str) -> re.Pattern[str]:
 
 _NOW = r"(?: (?:right )?now)?"
 _CLOSE_MAP = _re(_POLITE + r"(?:close|hide|dismiss|exit|remove|get rid of)(?: the| this| my)? map(?: window| view| screen)?")
+_ZOOM_IN = _re(_POLITE + r"(?:zoom in|zoom in (?:a )?(?:bit|little|more)|zoom closer|closer)")
+_ZOOM_OUT = _re(_POLITE + r"(?:zoom out|zoom out (?:a )?(?:bit|little|more)|zoom (?:further|farther) out)")
+_ZOOM_TO = _re(_POLITE + r"zoom (?:in )?(?:on|to|into|onto) (?:the )?(?P<q>.+)")
+_CENTER_ME = _re(_POLITE + r"(?:cent(?:er|re)(?: the map)? on me|cent(?:er|re) (?:the map )?on my location|"
+                 r"show me where i am(?: on the map)?)")
 _WHERE_AM_I = _re(_POLITE + r"(?:tell me )?(?:where (?:am i|i am)|what(?:'s| is|s) my (?:current )?location)" + _NOW)
 _TIME = _re(_POLITE + r"(?:tell me |give me )?(?:what(?:'s| is|s) )?the (?:current )?time" + _NOW
             + r"|" + _POLITE + r"what time is it" + _NOW
@@ -288,6 +293,16 @@ def match(text: str, now: datetime | None = None) -> FastPath | None:
         return FastPath("date", f"Today is {format_date(now)}, sir.")
     if _CLOSE_MAP.match(t):
         return FastPath("map", "Closing the map, sir.", _call("close_map"))
+    if _ZOOM_IN.match(t):
+        return FastPath("map", "Zooming in", _call("map_control", action="zoom_in"), speak_result=True)
+    if _ZOOM_OUT.match(t):
+        return FastPath("map", "Zooming out", _call("map_control", action="zoom_out"), speak_result=True)
+    if _CENTER_ME.match(t):
+        return FastPath("map", "One moment", _call("map_control", action="center_on_me"), speak_result=True)
+    m = _ZOOM_TO.match(t)
+    if m and m.group("q").strip() not in ("it", "that", "this", "in", "out"):
+        return FastPath("map", "One moment", _call("map_control", action="zoom_to", place=m.group("q").strip()),
+                        speak_result=True)
     if _WHERE_AM_I.match(t):
         return FastPath("where_am_i", "Let me see, sir.", _call("where_am_i"), speak_result=True)
     fp = _match_assistant(text, now)

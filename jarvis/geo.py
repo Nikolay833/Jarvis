@@ -28,6 +28,7 @@ log = logging.getLogger("jarvis.geo")
 USER_AGENT = "Jarvis-voice-assistant/0.1 (personal use)"
 IS_WINDOWS = sys.platform == "win32"
 CACHE_SECONDS = 600.0
+FAMOUS = 0.5  # Nominatim importance from which a result counts as a well-known place
 OFFLINE_MSG = "I can't reach the map services right now. Please check the internet connection."
 
 
@@ -52,6 +53,7 @@ class Place:
     lon: float
     label: str
     full: str = ""
+    bbox: tuple[float, float, float, float] | None = None  # (south, north, west, east): the place's own extent
 
 
 # ---- pure helpers ----------------------------------------------------------------------------------------
@@ -83,23 +85,45 @@ def short_label(item: dict[str, Any]) -> str:
     return str(item.get("display_name") or "").split(",")[0].strip()
 
 
+def _importance(r: dict[str, Any]) -> float:
+    try:
+        return float(r.get("importance") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def pick_best(results: list[dict[str, Any]], origin: tuple[float, float] | None) -> dict[str, Any] | None:
-    """Best Nominatim result. With an origin, the nearest one among the reasonably important results."""
+    """Best Nominatim result: importance first. The nearest to the origin only breaks ties between results that
+    are about as important as the best one (so "London" is London, UK, not a street named London nearby)."""
     items = [r for r in results if isinstance(r, dict) and "lat" in r and "lon" in r]
     if not items:
         return None
-    if origin is None or len(items) == 1:
-        return items[0]  # Nominatim already ranks by importance
-    top = max(float(r.get("importance") or 0.0) for r in items)
-    keep = [r for r in items if float(r.get("importance") or 0.0) >= top * 0.5] or items
+    top = max(_importance(r) for r in items)
+    if origin is None:
+        return max(items, key=_importance) if top > 0 else items[0]
+    keep = [r for r in items if _importance(r) >= top * 0.85] or items
     return min(keep, key=lambda r: haversine_m(origin[0], origin[1], float(r["lat"]), float(r["lon"])))
+
+
+def parse_bbox(item: dict[str, Any]) -> tuple[float, float, float, float] | None:
+    """Nominatim boundingbox ['south', 'north', 'west', 'east'] -> floats, or None."""
+    try:
+        s_, n, w, e = (float(x) for x in item["boundingbox"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return (s_, n, w, e) if s_ <= n and -90 <= s_ and n <= 90 else None
+
+
+def to_place(item: dict[str, Any]) -> Place:
+    return Place(float(item["lat"]), float(item["lon"]), short_label(item), str(item.get("display_name") or ""),
+                 parse_bbox(item))
 
 
 def parse_places(results: Any) -> list[Place]:
     out = []
     for r in results if isinstance(results, list) else []:
         try:
-            out.append(Place(float(r["lat"]), float(r["lon"]), short_label(r), str(r.get("display_name") or "")))
+            out.append(to_place(r))
         except (KeyError, TypeError, ValueError):
             continue
     return out
@@ -361,9 +385,17 @@ async def geocode(cfg: Config, query: str, origin: tuple[float, float] | None = 
         params: dict[str, Any] = {"q": text, "format": "jsonv2", "limit": 5, "bounded": 0}
         if origin is not None:
             params["viewbox"] = viewbox(*origin)
-        best = pick_best(await _nominatim(cfg, "/search", params), origin)
+        results = list(await _nominatim(cfg, "/search", params))
+        if origin is not None and max((_importance(r) for r in results), default=0.0) < FAMOUS:
+            # the nearby-biased search found nothing important: a famous place elsewhere ("London") may exist
+            params = {k: v for k, v in params.items() if k != "viewbox"}
+            seen = {(r.get("lat"), r.get("lon")) for r in results}
+            wide = [r for r in await _nominatim(cfg, "/search", params) if (r.get("lat"), r.get("lon")) not in seen]
+            if max((_importance(r) for r in wide), default=0.0) >= FAMOUS:
+                results += wide  # only a genuinely well-known place may outrank the local results
+        best = pick_best(results, origin)
         if best is not None:
-            return Place(float(best["lat"]), float(best["lon"]), short_label(best), str(best.get("display_name") or ""))
+            return to_place(best)
     raise GeoError(f"I couldn't find {q} on the map.")
 
 

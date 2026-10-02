@@ -10,9 +10,11 @@
     <link rel="preconnect" href="https://tiles.basemaps.cartocdn.com" crossorigin />
   </head>
   <body translate="no">
-    <div id="map" aria-label="Map"></div>
-    <div id="grid" aria-hidden="true"></div>
-    <div id="vignette" aria-hidden="true"></div>
+    <div id="stage">
+      <div id="map" aria-label="Map"></div>
+      <div id="grid" aria-hidden="true"></div>
+      <div id="vignette" aria-hidden="true"></div>
+    </div>
 
     <header id="frame">
       <span id="brand">JARVIS // NAVIGATION</span>
@@ -37,15 +39,6 @@
       <h2 id="steps-title"></h2>
       <ol id="steps" tabindex="0" aria-label="Turn by turn steps"></ol>
     </aside>
-
-    <div id="corner">
-      <p id="caption" role="status" aria-live="polite"></p>
-      <div id="actions" role="group" aria-label="Confirm action" inert>
-        <button id="approve" type="button">Approve</button>
-        <button id="deny" type="button">Deny</button>
-      </div>
-      <div id="orbwrap"><div id="arc" aria-hidden="true"></div><canvas id="orb" aria-hidden="true"></canvas></div>
-    </div>
 
     <p id="attrib">© OpenStreetMap contributors © CARTO</p>
     <script type="module" src="/src/map.ts"></script>

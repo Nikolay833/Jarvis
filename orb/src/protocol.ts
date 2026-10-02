@@ -6,7 +6,13 @@ export interface MapPoint {
   lat: number;
   lon: number;
   label: string;
+  /** Nominatim bounding box [south, north, west, east]: how far to zoom for a place (city, country, street). */
+  bbox?: [number, number, number, number];
 }
+export type MapControl =
+  | { action: "zoom_in" | "zoom_out"; amount: number }
+  | { action: "pan"; direction: "north" | "south" | "east" | "west"; amount: number }
+  | { action: "reset" };
 export interface MapOrigin extends MapPoint {
   accuracy: number; // metres
   source: "windows" | "home" | "ip" | string;
@@ -39,6 +45,7 @@ export type CoreMessage =
   | { type: "confirm_resolved"; id: string; approved: boolean }
   | ({ type: "map_show" } & MapShow)
   | { type: "map_hide" }
+  | ({ type: "map_control" } & MapControl)
   | { type: "job"; id: string; kind: string; status: "running" | "done" | "failed"; summary: string };
 
 export type OrbMessage =
@@ -82,6 +89,8 @@ export function parseCoreMessage(raw: unknown): CoreMessage | null {
       return parseMapShow(m);
     case "map_hide":
       return { type: "map_hide" };
+    case "map_control":
+      return parseMapControl(m);
     case "job":
       return m as unknown as CoreMessage;
     default:
@@ -95,7 +104,29 @@ function point(v: unknown): MapPoint | null {
   if (typeof v !== "object" || v === null) return null;
   const p = v as Record<string, unknown>;
   if (!num(p.lat) || !num(p.lon) || Math.abs(p.lat) > 90 || Math.abs(p.lon) > 180) return null;
-  return { lat: p.lat, lon: p.lon, label: typeof p.label === "string" ? p.label : "" };
+  const b = p.bbox;
+  const bbox =
+    Array.isArray(b) && b.length === 4 && b.every(num) && (b[0] as number) <= (b[1] as number)
+      ? (b as [number, number, number, number])
+      : undefined;
+  return { lat: p.lat, lon: p.lon, label: typeof p.label === "string" ? p.label : "", ...(bbox ? { bbox } : {}) };
+}
+
+function parseMapControl(m: Record<string, unknown>): CoreMessage | null {
+  const amount = num(m.amount) && m.amount > 0 ? Math.min(m.amount, 10) : 1;
+  switch (m.action) {
+    case "zoom_in":
+    case "zoom_out":
+      return { type: "map_control", action: m.action, amount };
+    case "pan":
+      return m.direction === "north" || m.direction === "south" || m.direction === "east" || m.direction === "west"
+        ? { type: "map_control", action: "pan", direction: m.direction, amount }
+        : null;
+    case "reset":
+      return { type: "map_control", action: "reset" };
+    default:
+      return null;
+  }
 }
 
 function route(v: unknown): MapRoute | null {

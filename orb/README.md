@@ -14,11 +14,12 @@ vanilla TypeScript, Vite. It is a client of the core's WebSocket event bus
 
 ## Map window
 
-"Jarvis, I want to go to X" opens a full-screen HUD map (second Tauri window `map`, `map.html` + `src/map.ts`):
+"Jarvis, I want to go to X" opens a centered HUD map overlay (second, transparent Tauri window `map` at ~70% of the
+screen, fading out at its edges; `map.html` + `src/map.ts`):
 dark MapLibre basemap (CARTO dark-matter, recolored in `src/map-style.ts`), glowing car route (cyan) and walking
-route (dashed blue), a side panel with Car / Walk / Public transport cards and turn-by-turn steps, and the orb
-shrunk into the bottom-right corner. Esc or Close hides it. Public transport is only a Google Maps link (free
-routing has no timetables). While it is open the small orb window is hidden (`set_map_visible` in `lib.rs`).
+route (dashed blue), a side panel with Car / Walk / Public transport cards and turn-by-turn steps. Esc or Close hides
+it; the normal orb window stays visible. Voice: "zoom in", "zoom in on London", "centre on me". Public transport is
+only a Google Maps link (free routing has no timetables). `set_map_visible` in `lib.rs` sizes, centers and shows it.
 Events: `map_show` / `map_hide` from the core, `map_closed` / `map_open_transit` back (see the protocol table).
 
 Without Rust: `node mock/mock-core.mjs --map`, then open `http://localhost:1420/map.html` (npm run dev) or the

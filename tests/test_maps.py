@@ -50,11 +50,24 @@ def _fresh():
 
 
 # ---- parsing and text ------------------------------------------------------------------------------------
-def test_pick_best_prefers_nearest_among_important():
+def test_pick_best_importance_first_nearest_breaks_ties():
     best = geo.pick_best(NOMINATIM_FIXTURE, ORIGIN)
-    assert best["lon"] == "23.4114"
-    assert geo.pick_best(NOMINATIM_FIXTURE, None)["lon"] == "23.4114"  # rank order without origin
+    assert best["lon"] == "23.4114"  # 0.55 vs 0.60: about as important, so the nearer one wins
+    assert geo.pick_best(NOMINATIM_FIXTURE, None)["lon"] == "27.4000"  # no origin: the most important
     assert geo.pick_best([], ORIGIN) is None
+    london = [{"lat": "42.70", "lon": "23.32", "name": "London", "importance": 0.21},
+              {"lat": "51.5074", "lon": "-0.1278", "name": "London", "importance": 0.97},
+              {"lat": "42.98", "lon": "-81.25", "name": "London", "importance": 0.62}]
+    assert geo.pick_best(london, ORIGIN)["lat"] == "51.5074"  # a famous city beats a small place next door
+
+
+def test_bbox_parsing():
+    item = {"lat": "51.5", "lon": "-0.12", "name": "London", "display_name": "London, UK",
+            "boundingbox": ["51.28", "51.69", "-0.51", "0.33"]}
+    p = geo.to_place(item)
+    assert p.bbox == (51.28, 51.69, -0.51, 0.33) and p.label == "London"
+    assert geo.parse_bbox({"boundingbox": ["x"]}) is None and geo.parse_bbox({}) is None
+    assert geo.parse_bbox({"boundingbox": ["52", "51", "0", "1"]}) is None
 
 
 def test_parse_places_and_labels():
@@ -221,7 +234,7 @@ def test_geocode_request_and_saved_places(monkeypatch):
     place = _run(geo.geocode(cfg, "airport", ORIGIN))
     assert place.label == "Sofia Airport" and place.lon == 23.4114
     assert reqs[0][1]["format"] == "jsonv2" and reqs[0][1]["limit"] == 5 and reqs[0][1]["bounded"] == 0
-    assert "viewbox" in reqs[0][1] and reqs[1][1]["q"] == "airport, Sofia"  # retry with the default city
+    assert "viewbox" in reqs[0][1] and "airport, Sofia" in [r[1]["q"] for r in reqs]  # retry with the default city
     with pytest.raises(geo.GeoError, match="home"):
         _run(geo.geocode(cfg, "home", ORIGIN))
     cfg.maps.work_address = "Tsarigradsko 7"
@@ -355,3 +368,119 @@ def test_system_prompt_mentions_maps():
     from jarvis.agent import SYSTEM_PROMPT
 
     assert "directions(destination=X)" in SYSTEM_PROMPT and "close_map" in SYSTEM_PROMPT
+
+
+def test_geocode_famous_place_beats_nearby_small_one(monkeypatch):
+    cfg = Config()
+    cfg.maps.default_city = ""
+    reqs = []
+
+    async def nom(c, path, params):
+        reqs.append(params)
+        if "viewbox" in params:
+            return [{"lat": "42.70", "lon": "23.32", "name": "London Street", "importance": 0.2}]
+        return [{"lat": "51.5074", "lon": "-0.1278", "name": "London", "display_name": "London, UK",
+                 "importance": 0.97, "boundingbox": ["51.28", "51.69", "-0.51", "0.33"]},
+                {"lat": "42.98", "lon": "-81.25", "name": "London", "importance": 0.6}]
+
+    monkeypatch.setattr(geo, "_nominatim", nom)
+    place = _run(geo.geocode(cfg, "London", ORIGIN))
+    assert place.label == "London" and place.lat == 51.5074 and place.bbox == (51.28, 51.69, -0.51, 0.33)
+    assert len(reqs) == 2 and "viewbox" not in reqs[1]
+
+
+def test_geocode_local_query_keeps_nearby(monkeypatch):
+    cfg = Config()
+    cfg.maps.default_city = ""
+
+    async def nom(c, path, params):
+        if "viewbox" in params:
+            return [{"lat": "42.69", "lon": "23.32", "name": "Pharmacy", "importance": 0.2}]
+        return [{"lat": "51.5", "lon": "-0.1", "name": "Pharmacy", "importance": 0.3}]  # not famous: ignored
+
+    monkeypatch.setattr(geo, "_nominatim", nom)
+    assert _run(geo.geocode(cfg, "pharmacy", ORIGIN)).lat == 42.69
+
+
+# ---- map_control, zoom_to, fast paths ----------------------------------------------------------------------
+def _london(monkeypatch):
+    async def locate(cfg, **kw): return (ORIGIN[0], ORIGIN[1], 30.0, "windows")
+    async def geocode(cfg, q, origin=None):
+        return geo.Place(51.5074, -0.1278, "London", "London, UK", (51.28, 51.69, -0.51, 0.33))
+    monkeypatch.setattr(geo, "locate", locate)
+    monkeypatch.setattr(geo, "geocode", geocode)
+
+
+def test_show_on_map_sends_bbox(monkeypatch, _fresh):
+    _london(monkeypatch)
+    out = _run(load_all().call("show_on_map", {"place": "London"}))
+    assert out == "Here is London on the map."
+    ev = _fresh[-1]
+    assert ev["type"] == "map_show" and ev["routes"] == [] and ev["origin"] is None
+    assert ev["destination"]["bbox"] == [51.28, 51.69, -0.51, 0.33]
+
+
+def test_map_control_requires_open_map(monkeypatch, _fresh):
+    mt.mark_closed()
+    reg = load_all()
+    for act in ("zoom_in", "zoom_out", "pan_north", "reset"):
+        assert _run(reg.call("map_control", {"action": act})).startswith("Error: The map isn't open")
+    assert not [e for e in _fresh if e["type"] == "map_control"]
+
+
+def test_map_control_events(monkeypatch, _fresh):
+    _london(monkeypatch)
+    reg = load_all()
+    _run(reg.call("show_on_map", {"place": "London"}))
+    assert _run(reg.call("map_control", {"action": "zoom_in"})) == "Zoomed in"
+    assert _fresh[-1] == {"type": "map_control", "action": "zoom_in", "amount": 1.0}
+    assert _run(reg.call("map_control", {"action": "zoom_out", "amount": 2})) == "Zoomed out by 2 levels"
+    assert _fresh[-1]["amount"] == 2.0
+    assert _run(reg.call("map_control", {"action": "pan_east"})) == "Moved the map east"
+    assert _fresh[-1] == {"type": "map_control", "action": "pan", "direction": "east", "amount": 1.0}
+    assert _run(reg.call("map_control", {"action": "reset"})).startswith("Reset")
+    assert _fresh[-1] == {"type": "map_control", "action": "reset"}
+    assert _run(reg.call("map_control", {"action": "dance"})).startswith("Error: Unknown map action")
+    _run(reg.call("close_map", {}))
+    assert _run(reg.call("map_control", {"action": "zoom_in"})).startswith("Error: The map isn't open")
+
+
+def test_map_control_zoom_to_opens_map(monkeypatch, _fresh):
+    _london(monkeypatch)
+    mt.mark_closed()
+    out = _run(load_all().call("map_control", {"action": "zoom_to", "place": "London"}))
+    assert "London" in out and _fresh[-1]["type"] == "map_show"
+    assert _fresh[-1]["destination"]["label"] == "London"
+    assert _run(load_all().call("map_control", {"action": "zoom_to"})).startswith("Error: Zoom to where")
+
+
+def test_map_control_center_on_me(monkeypatch, _fresh):
+    _london(monkeypatch)
+    out = _run(load_all().call("map_control", {"action": "center_on_me"}))
+    assert out.startswith("Centred the map on you") and _fresh[-1]["type"] == "map_show"
+    bb = _fresh[-1]["destination"]["bbox"]
+    assert bb[0] < ORIGIN[0] < bb[1] and bb[2] < ORIGIN[1] < bb[3]
+
+
+@pytest.mark.parametrize("text,action", [("zoom in", "zoom_in"), ("Zoom out please", "zoom_out"),
+                                         ("zoom in a bit", "zoom_in"), ("centre on me", "center_on_me"),
+                                         ("center the map on me", "center_on_me")])
+def test_fastpath_map_control(text, action):
+    fp = match(text)
+    assert fp and fp.kind == "map" and fp.speak_result and fp.action[1] == "map_control"
+    assert json.loads(fp.action[2]) == {"action": action}
+
+
+@pytest.mark.parametrize("text,place", [("zoom in on London", "london"), ("zoom to the airport", "airport"),
+                                        ("Zoom on Paris", "paris")])
+def test_fastpath_zoom_to(text, place):
+    fp = match(text)
+    assert fp and json.loads(fp.action[2]) == {"action": "zoom_to", "place": place}
+
+
+def test_map_control_in_prompt_and_registry():
+    from jarvis.agent import SYSTEM_PROMPT
+
+    assert "map_control" in SYSTEM_PROMPT and "never say you moved or zoomed" in SYSTEM_PROMPT
+    t = load_all().get("map_control")
+    assert t.risk == "safe" and t.parameters["required"] == ["action"]

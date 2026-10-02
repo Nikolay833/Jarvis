@@ -21,7 +21,7 @@ export function onHotkey(cb: () => void): void {
   void listen("hotkey", cb);
 }
 
-/** Show/hide the full-screen map window (Rust hides the small orb window while the map is up). */
+/** Show/hide the transparent map overlay window (Rust sizes and centers it; the orb window stays). */
 export async function setMapVisible(visible: boolean): Promise<void> {
   if (!inTauri) return;
   try {

@@ -2,7 +2,7 @@
 //   node mock/mock-core.mjs          -> ws://127.0.0.1:8765, plays the demo loop
 //   node mock/mock-core.mjs --manual -> no demo; POST/GET http://127.0.0.1:8766/send?m=<json> broadcasts
 //   node mock/mock-core.mjs --map    -> like --manual, and sends the Sofia map scenario to every new client
-//   GET http://127.0.0.1:8766/map[?mode=none|transit] broadcasts it; GET /maphide hides the map
+//   GET http://127.0.0.1:8766/map[?mode=all|none|transit|london] broadcasts it; GET /maphide hides the map
 import http from "node:http";
 import crypto from "node:crypto";
 
@@ -87,6 +87,7 @@ function mapShow(mode = "all") {
   const walk = { mode: "walk", distance_m: sum(walkSteps), duration_s: 69 * 60 + 40, geometry: { type: "LineString", coordinates: densify(WALK_WP, 18) },
     steps: walkSteps.map(([text, d]) => ({ text, distance_m: d })) };
   const url = "https://www.google.com/maps/dir/?api=1&origin=42.684700,23.318800&destination=42.696600,23.411400&travelmode=transit";
+  if (mode === "london") return { type: "map_show", origin: null, destination: { lat: 51.5074, lon: -0.1278, label: "London", bbox: [51.28, 51.69, -0.51, 0.33] }, routes: [], transit_url: "", focus: "" };
   if (mode === "none") return { type: "map_show", origin: null, destination: DEST, routes: [], transit_url: "", focus: "" };
   if (mode === "transit") return { type: "map_show", origin: ORIGIN, destination: DEST, routes: [], transit_url: url, focus: "transit" };
   return { type: "map_show", origin: ORIGIN, destination: DEST, routes: [car, walk], transit_url: url, focus: "" };
@@ -122,3 +123,5 @@ async function demo() {
   }
 }
 if (!manual) demo();
+
+// map_control from the core, e.g. GET /send?m={"type":"map_control","action":"zoom_in","amount":1}
