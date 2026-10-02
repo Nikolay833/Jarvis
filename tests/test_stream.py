@@ -52,7 +52,7 @@ def test_keep_alive_and_config():
     assert c.ollama.keep_alive == "-1"
     assert config_from_dict({"ollama": {"keep_alive": "10m"}}).ollama.keep_alive == "10m"
     d = config_from_dict({})
-    assert d.audio.silence_seconds == 1.2 and d.ollama.max_reply_tokens == 200 and d.agent.fast_paths
+    assert d.audio.silence_seconds == 1.2 and d.ollama.max_reply_tokens == 450 and d.agent.fast_paths
 
 
 def test_payload_options():

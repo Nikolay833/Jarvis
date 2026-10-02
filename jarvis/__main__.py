@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import logging
+import re
 import logging.handlers
 import sys
 import threading
@@ -23,7 +24,19 @@ from .llm import LLMError, OllamaClient
 from .tools import load_all
 from .tools.context import set_context
 
-MAX_FOLLOW_UPS = 4  # back-and-forth answers in one turn without saying "Hey Jarvis" again
+# Saying one of these during a conversation ends it.
+ENDERS = re.compile(r"^(?:ok(?:ay)?[, ]*)?(?:thanks?|thank you|cheers|that'?s (?:all|it)|nothing|no(?:pe)?|"
+                    r"never ?mind|bye|goodbye|see you|all good|i'?m good|we'?re done|done)\b[ .!,]*(?:jarvis)?[ .!]*$")
+_FAREWELLS = ["Anytime.", "Of course.", "Happy to help.", "Right you are.", "Very good."]
+
+
+def _pick_farewell() -> str:
+    import random
+
+    return random.choice(_FAREWELLS)
+
+
+MAX_FOLLOW_UPS = 12  # back-and-forth answers in one turn without saying "Hey Jarvis" again
 FOLLOW_ON_TIMEOUT = 3.0  # seconds to wait for the rest of a cut-off sentence
 
 log = logging.getLogger("jarvis")
@@ -45,6 +58,7 @@ class Assistant:
     def __init__(self, cfg: Config, voice: bool = True, debug_audio: bool = False) -> None:
         self.cfg = cfg
         self.voice = voice
+        self._conversation_over = False
         self.bus = EventBus(cfg.bus.host, cfg.bus.port)
         self.requests: asyncio.Queue[Request] = asyncio.Queue()
         self.turn_lock = asyncio.Lock()
@@ -270,13 +284,23 @@ class Assistant:
                     text = await self.finish_utterance(text)
                 if not text:
                     return
+                a = self.cfg.audio
                 for _ in range(MAX_FOLLOW_UPS + 1):
                     reply = await self.respond(text)
-                    # Jarvis asked something: keep listening for the answer without the wake word.
-                    if not (self.voice and self.cfg.audio.follow_up and reply and asks_question(reply)):
+                    if not self.voice or self._conversation_over:
                         break
-                    text = await self.listen_follow_up()
-                    if not text:
+                    asked = bool(reply) and asks_question(reply)
+                    # Keep the conversation open: always in conversation mode, else only after a question.
+                    if asked and a.follow_up:
+                        wait = a.follow_up_seconds
+                    elif a.conversation:
+                        wait = a.conversation_seconds
+                    else:
+                        break
+                    text = await self.listen_follow_up(wait)
+                    if not text or ENDERS.match(text.strip().lower()):
+                        if text:
+                            await self.say_safe(_pick_farewell())
                         break
             except Exception:  # noqa: BLE001
                 log.exception("turn failed")
@@ -296,11 +320,10 @@ class Assistant:
             text = f"{text} {more}"
         return text
 
-    async def listen_follow_up(self) -> str:
-        """Listen once (no wake word) after Jarvis asked a question. Silence means the user is done."""
+    async def listen_follow_up(self, wait: float) -> str:
+        """Listen once (no wake word) after a reply. Silence means the user is done."""
         self.bus.emit_nowait("state", state="listening")
-        text = await self.record_text(flush=True, before=self._chime if self.cfg.audio.chime else None,
-                                      no_speech=self.cfg.audio.follow_up_seconds)
+        text = await self.record_text(flush=True, before=None, no_speech=wait)
         if text:
             text = await self.finish_utterance(text)
             log.info("follow-up: '%s'", text)
@@ -309,11 +332,13 @@ class Assistant:
     async def respond(self, text: str) -> str:
         """Answer one user utterance (fast path or agent). Returns what Jarvis said ('' if unknown)."""
         t_heard = time.perf_counter()
+        self._conversation_over = False
         self.bus.emit_nowait("transcript", text=text, final=True)
         self.bus.emit_nowait("state", state="thinking")
         fp = fastpath.match(text) if self.cfg.agent.fast_paths else None
         if fp is not None:
             log.info("fast path: %s", fp.kind)
+            self._conversation_over = fp.kind == "stop"
             await self.run_fast(fp, text)
             self._log_latency(t_heard, None, None, self._first_audio)
             return ""

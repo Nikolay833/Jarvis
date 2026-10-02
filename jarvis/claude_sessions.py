@@ -145,14 +145,21 @@ def humanize_age(seconds: float) -> str:
     return f"{mo} months ago" if mo < 24 else "years ago"
 
 
+ORDINALS = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"]
+
+
+def ordinal(index: int) -> str:
+    return ORDINALS[index - 1] if 1 <= index <= len(ORDINALS) else f"number {index}"
+
+
 def format_line(index: int, s: Session, now: float | None = None) -> str:
-    """'1. Login bug, Jarvis, 2 hours ago'"""
+    """'The second is "Login bug" in Jarvis, from 2 hours ago.' (spoken, one sentence per session)"""
     now = time.time() if now is None else now
-    return f"{index}. {s.label}, {s.project_name}, {humanize_age(now - s.last_activity)}"
+    return f'The {ordinal(index)} is "{s.label}" in {s.project_name}, from {humanize_age(now - s.last_activity)}.'
 
 
 def format_list(sessions: list[Session], now: float | None = None) -> str:
-    return "\n".join(format_line(i, s, now) for i, s in enumerate(sessions, 1))
+    return " ".join(format_line(i, s, now) for i, s in enumerate(sessions, 1))
 
 
 # ---- parsing --------------------------------------------------------------------------------------------

@@ -17,7 +17,7 @@ class OllamaConfig:
     timeout: float = 120.0
     num_ctx: int = 8192
     keep_alive: str = "-1"  # "-1" = keep the model loaded forever (sent as int -1); or e.g. "30m"
-    max_reply_tokens: int = 200  # num_predict per LLM step; 0 = no limit
+    max_reply_tokens: int = 450  # num_predict per LLM step; 0 = no limit
 
 
 # Words Whisper should expect to hear (names it otherwise mishears).
@@ -79,6 +79,8 @@ class AudioConfig:
     chime: bool = True  # soft chime when listening starts
     follow_up: bool = True  # after Jarvis asks a question, listen for the answer without the wake word
     follow_up_seconds: float = 6.0  # how long to wait for that answer
+    conversation: bool = True  # keep listening after every reply; Jarvis goes away once you stop talking
+    conversation_seconds: float = 5.0  # silence that ends the conversation
 
 
 @dataclass

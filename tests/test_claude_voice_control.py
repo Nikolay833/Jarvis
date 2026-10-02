@@ -52,8 +52,7 @@ def test_tools_registered_and_safe():
 
 def test_claude_sessions_lists_spoken(world):
     out = cst.claude_sessions()
-    lines = out.splitlines()
-    assert lines[1].startswith("1. Looking") or lines[1].startswith("1. login page broken")
+    assert out.startswith("Here are your latest") and 'The first is "' in out and "1." not in out
     assert "Jarvis" in out and "hours ago" in out
     jar = cst.claude_sessions(project="the jarvis project", count=1)
     assert "dark mode" in jar and "login" not in jar
@@ -71,8 +70,8 @@ def test_open_session_unique_match_resumes(world, opened):
 def test_open_session_ambiguous_then_choice(world, opened):
     out = cst.claude_open_session(topic="login")
     assert opened == []
-    assert out.startswith("I found 2 sessions: 1. ") and out.endswith("Which one, sir?")
-    assert "2. " in out
+    assert out.startswith("I found 2 that could match. The first is ") and out.endswith("Which one would you like?")
+    assert "The second is " in out
     cst.claude_open_session(topic="", project="", choice=2)  # follow-up: uses the offered list
     assert len(opened) == 1 and opened[0]["args"][0] == "--resume"
     assert opened[0]["args"][1] in ("j-login", "s-login")

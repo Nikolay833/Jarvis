@@ -23,10 +23,32 @@ log = logging.getLogger("jarvis.tts")
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
 
+# A "sentence" that is only a list number ("2.") or ends in a common abbreviation is not a
+# sentence: speaking it alone puts the pause in the wrong place ("...ago two. <pause> Settings").
+_NOT_AN_END = re.compile(r"(?:^|\s)(?:\d{1,3}|[A-Za-z]|mr|mrs|ms|dr|st|vs|etc|e\.g|i\.e|no)\.$", re.IGNORECASE)
+
+
+def _merge(parts: list[str]) -> list[str]:
+    out: list[str] = []
+    carry = ""
+    for p in parts:
+        p = (carry + " " + p).strip() if carry else p.strip()
+        carry = ""
+        if not p:
+            continue
+        if _NOT_AN_END.search(p):
+            carry = p
+        else:
+            out.append(p)
+    if carry:
+        out.append(carry)
+    return out
+
+
 def split_sentences(text: str) -> list[str]:
     """Split text into sentences for incremental synthesis."""
     text = re.sub(r"\s+", " ", text).strip()
-    return [s.strip() for s in _SENTENCE_END.split(text) if s.strip()]
+    return _merge(_SENTENCE_END.split(text))
 
 
 class SentenceBuffer:
@@ -40,8 +62,13 @@ class SentenceBuffer:
         parts = _SENTENCE_END.split(self._buf)
         if len(parts) < 2:
             return []
-        self._buf = parts[-1]
-        return [re.sub(r"\s+", " ", p).strip() for p in parts[:-1] if p.strip()]
+        done = [re.sub(r"\s+", " ", p).strip() for p in parts[:-1] if p.strip()]
+        tail = parts[-1]
+        # A trailing list number or abbreviation waits for the words that follow it.
+        while done and _NOT_AN_END.search(done[-1]):
+            tail = done.pop() + " " + tail
+        self._buf = tail
+        return _merge(done)
 
     def flush(self) -> list[str]:
         rest, self._buf = self._buf, ""

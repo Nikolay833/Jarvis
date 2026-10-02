@@ -42,3 +42,43 @@ def test_fix_names_leaves_weather_clouds():
 
     assert fix_names("are there clouds today") == "are there clouds today"
     assert fix_names("it is cloudy") == "it is cloudy"
+
+
+def test_list_numbers_do_not_split_sentences():
+    from jarvis.audio.tts import SentenceBuffer, split_sentences
+
+    text = "Here they are. 1. Login bug, two hours ago. 2. Settings page, yesterday."
+    assert split_sentences(text) == ["Here they are.", "1. Login bug, two hours ago.", "2. Settings page, yesterday."]
+    buf, got = SentenceBuffer(), []
+    for ch in text + " ":
+        got += buf.feed(ch)
+    got += buf.flush()
+    assert got == ["Here they are.", "1. Login bug, two hours ago.", "2. Settings page, yesterday."]
+    assert split_sentences("Ask Dr. Smith. Then go.") == ["Ask Dr. Smith.", "Then go."]
+
+
+@pytest.mark.parametrize("text", ["thanks", "Thank you, Jarvis.", "that's all", "okay thanks", "no", "never mind",
+                                  "bye", "I'm good"])
+def test_conversation_enders(text):
+    from jarvis.__main__ import ENDERS
+
+    assert ENDERS.match(text.strip().lower())
+
+
+@pytest.mark.parametrize("text", ["no, open chrome instead", "thanks, now play some music", "what's the time"])
+def test_not_enders(text):
+    from jarvis.__main__ import ENDERS
+
+    assert not ENDERS.match(text.strip().lower())
+
+
+def test_spoken_session_list_uses_ordinals():
+    from types import SimpleNamespace
+
+    from jarvis.claude_sessions import format_list
+
+    sessions = [SimpleNamespace(label="Login bug", project_name="Jarvis", last_activity=0.0),
+                SimpleNamespace(label="Settings", project_name="Jarvis", last_activity=0.0)]
+    out = format_list(sessions, now=7200.0)
+    assert out.startswith('The first is "Login bug" in Jarvis, from 2 hours ago. The second is')
+    assert "1." not in out

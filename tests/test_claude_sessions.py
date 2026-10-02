@@ -116,10 +116,10 @@ def test_spoken_list_formatting():
     now = 1_800_000_000.0
     s = [mk("1", "Login bug", age=7300), mk("2", "", first="add dark mode to the settings page " * 5, project="/p/Site", age=86400)]
     out = cs.format_list(s, now)
-    lines = out.splitlines()
-    assert lines[0] == "1. Login bug, Jarvis, 2 hours ago"
-    assert lines[1].startswith("2. add dark mode to the settings page") and lines[1].endswith(", Site, yesterday")
-    assert "..." in lines[1]
+    assert out.startswith('The first is "Login bug" in Jarvis, from 2 hours ago. ')
+    second = out.split(" The second is ", 1)[1]
+    assert second.startswith('"add dark mode to the settings page') and second.endswith('" in Site, from yesterday.')
+    assert "..." in second
 
 
 def test_first_sentences_and_speakable():

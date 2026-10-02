@@ -36,8 +36,7 @@ def _project_folder(project: str, sessions: list[cs.Session]) -> str:
 
 
 def _spoken_list(ranked: list[cs.Ranked]) -> str:
-    return ", ".join(
-        cs.format_line(i, r.session).rstrip(".") for i, r in enumerate(ranked, 1))
+    return cs.format_list([r.session for r in ranked])
 
 
 def _pick(topic: str, project: str, choice: int = 0) -> tuple[cs.Session | None, str]:
@@ -63,7 +62,7 @@ def _pick(topic: str, project: str, choice: int = 0) -> tuple[cs.Session | None,
     if topic.strip() and cs.is_ambiguous(ranked):
         _offer["ids"] = [r.session.id for r in ranked]
         _offer["at"] = time.time()
-        return None, f"I found {len(ranked)} sessions: {_spoken_list(ranked)}. Which one, sir?"
+        return None, f"I found {len(ranked)} that could match. {_spoken_list(ranked)} Which one would you like?"
     return ranked[0].session, ""
 
 
@@ -92,8 +91,10 @@ def claude_sessions(project: str = "", count: int = 5) -> str:
     ranked = cs.find_sessions("", project or None, limit=count, sessions=sessions)
     if not ranked:
         return "I found no Claude sessions" + (f" in {project.strip()}." if project.strip() else ".")
-    head = f"Your latest {len(ranked)} Claude sessions:" if len(ranked) > 1 else "Your latest Claude session:"
-    return head + "\n" + cs.format_list([r.session for r in ranked])
+    if len(ranked) == 1:
+        return "You have one recent Claude session. " + cs.format_list([ranked[0].session]).replace("The first is", "It's", 1)
+    head = f"Here are your latest {len(ranked)} Claude sessions."
+    return head + " " + cs.format_list([r.session for r in ranked]) + " (Read this list out as natural speech.)"
 
 
 @tool("Open an existing Claude Code session in a terminal, found by topic and/or project (resumes it, optionally "
