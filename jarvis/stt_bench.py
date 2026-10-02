@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import logging
 import time
 import wave
@@ -133,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Compare speech-to-text engines on your own recordings.")
     ap.add_argument("-n", type=int, default=4, help="utterances to record (default 4)")
     ap.add_argument("--files", nargs="+", help="wav files to use instead of recording")
+    ap.add_argument("--last", action="store_true", help="reuse the most recent set of recordings")
     ap.add_argument("--config", help="path to config.toml")
     ap.add_argument("--device", help="mic name or index (default: [audio] input_device)")
     args = ap.parse_args(argv)
@@ -140,8 +142,18 @@ def main(argv: list[str] | None = None) -> int:
     cfg = load_config(args.config)
 
     clips: list[tuple[str, np.ndarray]] = []
+    if args.last:
+        args.files = [str(OUT_DIR / "*.wav")]
     if args.files:
-        clips = [(Path(f).name, read_wav(f)) for f in args.files]
+        # cmd.exe does not expand wildcards, so do it here.
+        paths = sorted({p for f in args.files for p in (glob.glob(f) or [f])})
+        if args.last:
+            stamps = sorted({Path(p).name.rsplit("-", 1)[0] for p in paths})
+            paths = [p for p in paths if stamps and Path(p).name.startswith(stamps[-1] + "-")]
+        if not paths:
+            print("No recordings found; run without --files/--last to record some.")
+            return 1
+        clips = [(Path(f).name, read_wav(f)) for f in paths]
     else:
         print("Say these (or your own):")
         for line in SCRIPT:
