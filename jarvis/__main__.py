@@ -17,6 +17,7 @@ from typing import Any
 from . import fastpath
 from .agent import Agent, Confirmer
 from .bus import EventBus
+from .tools.files import DETAILS_MARK
 from .claude_watch import watch as claude_watch
 from .utterance import asks_question, fix_names, sounds_unfinished
 from .config import Config, load_config, repo_root
@@ -85,7 +86,8 @@ class Assistant:
             self.wake = WakeWordDetector(cfg.wakeword.model, cfg.wakeword.threshold, self.mic, debug=debug_audio)
             self.recorder = Recorder(self.mic, a.silence_seconds, a.max_record_seconds, a.no_speech_timeout)
             self.stt = make_transcriber(cfg)
-            self.speaker = KokoroSpeaker(self.bus, cfg.tts.voice, cfg.tts.lang_code, cfg.tts.speed, a.output_device)
+            self.speaker = KokoroSpeaker(self.bus, cfg.tts.voice, cfg.tts.lang_code, cfg.tts.speed, a.output_device,
+                                         cfg.tts.fx, cfg.tts.fx_amount)
         else:
             from .audio.tts import ConsoleSpeaker
 
@@ -207,9 +209,9 @@ class Assistant:
             return
         if fp.speak_result:
             reply = await self._fast_result(fp)
-            self.agent.add_exchange(text, reply)
+            self.agent.add_exchange(text, reply)  # history keeps the details (paths) for follow-ups
             self.bus.emit_nowait("state", state="speaking")
-            await self.speaker.speak(reply)
+            await self.speaker.speak(reply.split(DETAILS_MARK, 1)[0].strip())
             return
         self.agent.add_exchange(text, fp.reply)
         self.bus.emit_nowait("state", state="speaking")

@@ -102,3 +102,37 @@ def test_claude_requests_are_not_status(text):
 
     fp = fastpath.match(text)
     assert fp is None or fp.kind != "claude_status"
+
+
+@_pytest.mark.parametrize("text", ["search for cats", "search for the tax report in my", "search for this"])
+def test_plain_search_is_not_a_web_fast_path(text):
+    from jarvis import fastpath
+
+    fp = fastpath.match(text)
+    assert fp is None or fp.kind != "search"
+
+
+@_pytest.mark.parametrize("text, q", [("google cheap flights", "cheap flights"),
+                                      ("search the web for pizza near me", "pizza near me"),
+                                      ("search for black holes online", "black holes"),
+                                      ("look up the weather on google", "the weather")])
+def test_explicit_web_search(text, q):
+    import json
+
+    from jarvis import fastpath
+
+    fp = fastpath.match(text)
+    assert fp.kind == "search" and json.loads(fp.action[2])["search"] == q
+
+
+@_pytest.mark.parametrize("text, q, where", [("search for my tax report on my pc", "tax report", "~"),
+                                             ("find the testing folder on my desktop", "testing folder", "desktop"),
+                                             ("find a file called invoice in my downloads", "invoice", "downloads")])
+def test_local_find(text, q, where):
+    import json
+
+    from jarvis import fastpath
+
+    fp = fastpath.match(text)
+    args = json.loads(fp.action[2])
+    assert fp.kind == "find_local" and fp.action[1] == "find_on_pc" and args == {"name": q, "where": where}

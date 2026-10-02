@@ -83,7 +83,20 @@ _M_STOP = _re(_POLITE + r"stop (?:the |my )?(?:music|song|track|playback|spotify
 _M_WHAT = _re(r"(?:what(?:'s| is|s) (?:currently |now )?playing(?: right now| now)?|"
               r"what (?:song|track) is (?:this|playing|that)(?: right now| now)?|what am i listening to)")
 _PLAY_SPOTIFY = _re(_POLITE + r"play (.+?) (?:on|in|with|using) spotify")
-_SEARCH = _re(_POLITE + r"(?:search(?: for)?|google|look up) (.+?)(?: (?:in|on|using|with) (?:google )?chrome)?")
+# Web search only when the user clearly means the web. A plain "search for X" is ambiguous
+# (web or PC?) and goes to the model, which asks.
+_WEB = r"(?:in|on|using|with) (?:google )?chrome|on google|online|on the (?:web|internet)"
+_SEARCH = re.compile(
+    rf"^{_POLITE}(?:google (?P<q1>.+?)(?: (?:{_WEB}))?"
+    rf"|(?:search|look) (?:the web|online|google|the internet) for (?P<q2>.+?)"
+    rf"|(?:search(?: for)?|look up) (?P<q3>.+?) (?:{_WEB}))$")
+# "search for X on my pc", "find X in my documents" -> local file search
+_PLACES = {"pc": "~", "computer": "~", "laptop": "~", "files": "~", "drive": "~", "desktop": "desktop",
+           "documents": "documents", "downloads": "downloads", "pictures": "pictures", "music": "music",
+           "videos": "videos"}
+_FIND_LOCAL = re.compile(
+    rf"^{_POLITE}(?:search(?: for)?|find|look for|locate) (?:a |the |my )?(?:(?:file|folder) (?:called |named )?)?"
+    rf"(?P<q>.+?) (?:on|in) (?:my |the )?(?P<place>{'|'.join(_PLACES)})$")
 _OPEN_WHAT = re.compile(r"^(?:open|open it|open up|open the|open a|open my|open that|launch|start)$")
 # "what did Claude say", "what's Claude doing in the jarvis project", "is Claude done"
 _CLAUDE_STATUS = re.compile(
@@ -160,11 +173,17 @@ def match(text: str, now: datetime | None = None) -> FastPath | None:
         project = pm.group("project").strip() if pm else ""
         return FastPath("claude_status", "Let me check, sir.", _call("claude_status", project=project),
                         speak_result=True)
+    m = _FIND_LOCAL.match(t)
+    if m:
+        q, place = m.group("q").strip(), m.group("place")
+        if q and q not in ("it", "that", "this"):
+            return FastPath("find_local", f"Looking for {q}.", _call("find_on_pc", name=q, where=_PLACES[place]),
+                            speak_result=True)
     m = _SEARCH.match(t)
     if m:
-        q = m.group(1).strip()
+        q = (m.group("q1") or m.group("q2") or m.group("q3") or "").strip()
         if q and q not in ("chrome", "it", "that") and not _SEARCH_OTHER_SITE.search(q):
-            return FastPath("search", f"Searching for {q}, sir.", _call("open_chrome", search=q))
+            return FastPath("search", f"Searching the web for {q}.", _call("open_chrome", search=q))
         return None
     m = _OPEN.match(t)
     if m:

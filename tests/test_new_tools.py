@@ -39,7 +39,7 @@ def call_of(text):
     ("what song is this", "spotify_now_playing", {}),
     ("play bohemian rhapsody on spotify", "spotify_play", {"query": "bohemian rhapsody"}),
     ("Jarvis play Blinding Lights by The Weeknd on Spotify.", "spotify_play", {"query": "blinding lights by the weeknd"}),
-    ("search for cats", "open_chrome", {"search": "cats"}),
+    ("search for cats online", "open_chrome", {"search": "cats"}),
     ("search for best pizza in chrome", "open_chrome", {"search": "best pizza"}),
     ("google python tutorials", "open_chrome", {"search": "python tutorials"}),
 ])

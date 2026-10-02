@@ -155,3 +155,16 @@ def test_history_mentions_jobs(home):
         assert "[zz]" in ch.claude_code_history()
     finally:
         jobs.jobs.pop("zz")
+
+
+def test_find_on_pc_loose_match(tmp_path):
+    from jarvis.tools.files import DETAILS_MARK, find_on_pc
+
+    (tmp_path / "Work").mkdir()
+    (tmp_path / "Work" / "Tax_Report_2025.pdf").write_text("x")
+    (tmp_path / "notes.txt").write_text("x")
+    out = find_on_pc("my tax report", str(tmp_path))
+    spoken, details = out.split(DETAILS_MARK)
+    assert "Tax_Report_2025.pdf" in spoken and "in Work" in spoken and str(tmp_path) not in spoken
+    assert "Tax_Report_2025.pdf" in details
+    assert "couldn't find" in find_on_pc("holiday photos", str(tmp_path))

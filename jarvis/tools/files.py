@@ -130,6 +130,75 @@ def search_files(root: str, pattern: str) -> str:
     return "\n".join(found) if found else "No matches"
 
 
+_SKIP_DIRS = {"node_modules", "__pycache__", "appdata", "$recycle.bin", "windows", "program files",
+              "program files (x86)", "site-packages", ".git", ".venv", "venv"}
+_last_found: list[str] = []
+DETAILS_MARK = "\n[details, not spoken]"
+
+
+def _words(text: str) -> list[str]:
+    import re
+
+    return [w for w in re.split(r"[^a-z0-9]+", text.lower()) if w]
+
+
+def _matches(name: str, words: list[str]) -> bool:
+    flat = " ".join(_words(name))
+    joined = flat.replace(" ", "")
+    return all(w in flat or w in joined for w in words)
+
+
+def _spoken_place(path: str) -> str:
+    parent = Path(path).parent
+    return f"in {parent.name}" if parent.name else ""
+
+
+@tool("Find files or folders on the PC by (part of) their name and give a short spoken answer. Use for "
+      "'find X on my PC', 'search my documents for X', 'where is my X file'. Words match loosely: 'tax report' "
+      "finds Tax_Report_2025.pdf. Afterwards open_path can open one of the results.")
+def find_on_pc(name: str, where: str = "~") -> str:
+    """Find files and folders by name.
+
+    Args:
+        name: Words from the file or folder name, e.g. "tax report".
+        where: Folder to search: "~" (whole user folder), "desktop", "documents", "downloads", or a path.
+    """
+    root = _p(where or "~")
+    if not root.is_dir():
+        raise ToolError(f"{root} is not a folder")
+    words = [w for w in _words(name) if w not in ("a", "the", "my", "file", "folder", "called", "named")]
+    if not words:
+        raise ToolError("tell me part of the name to look for")
+    hits: list[tuple[int, float, str]] = []
+    deadline = time.monotonic() + SEARCH_TIME_LIMIT
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".") and d.lower() not in _SKIP_DIRS]
+        for n in dirnames + filenames:
+            if _matches(n, words):
+                full = os.path.join(dirpath, n)
+                exact = 0 if " ".join(_words(Path(n).stem)) == " ".join(words) else 1
+                try:
+                    mtime = os.path.getmtime(full)
+                except OSError:
+                    mtime = 0.0
+                hits.append((exact, -mtime, full))
+        if time.monotonic() > deadline or len(hits) > 500:
+            break
+    hits.sort()
+    _last_found[:] = [h[2] for h in hits[:10]]
+    if not hits:
+        return f"I couldn't find anything called {name} there."
+    top = _last_found[:3]
+    kinds = ["folder" if os.path.isdir(p) else "file" for p in top]
+    if len(hits) == 1:
+        return (f"Found it: the {kinds[0]} {Path(top[0]).name}, {_spoken_place(top[0])}. Shall I open it?"
+                + DETAILS_MARK + " " + top[0])
+    parts = [f"{Path(p).name} {_spoken_place(p)}" for p in top]
+    more = f" and {len(hits) - 3} more" if len(hits) > 3 else ""
+    return (f"I found {len(hits)} matches. The best are {', '.join(parts)}{more}. Which one should I open?"
+            + DETAILS_MARK + " " + "; ".join(top))
+
+
 @tool("Open a file or folder with its default application.")
 def open_path(path: str) -> str:
     """Open a file or folder.
